@@ -45,3 +45,4 @@ macs_final/
 # ── Credentials (never commit these) ─────────────────────────────────────
 .env
 secrets.py
+macs_final
