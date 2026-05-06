@@ -1,0 +1,336 @@
+\documentclass[12pt]{article}
+
+% ── Packages ──────────────────────────────────────────────────────────────────
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{parskip}
+\usepackage{fancyhdr}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, backgrounds}
+
+% ── Colors ────────────────────────────────────────────────────────────────────
+\definecolor{primaryblue}{RGB}{30, 80, 160}
+\definecolor{lightblue}{RGB}{220, 235, 255}
+\definecolor{darkgray}{RGB}{60, 60, 60}
+\definecolor{midgray}{RGB}{130, 130, 130}
+
+% ── Hyperref ──────────────────────────────────────────────────────────────────
+\hypersetup{
+    colorlinks=true,
+    linkcolor=primaryblue,
+    citecolor=primaryblue,
+    urlcolor=primaryblue
+}
+
+% ── Section formatting ────────────────────────────────────────────────────────
+\titleformat{\section}{\large\bfseries\color{primaryblue}}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries\color{darkgray}}{}{0em}{}
+\titleformat{\subsubsection}{\normalsize\itshape\color{darkgray}}{}{0em}{}
+
+% ── Header / Footer ───────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\textcolor{midgray}{\small MACS 30113 · Large-Scale Computing · Final Project Proposal}}
+\lhead{\textcolor{midgray}{\small Yulin (Olivia) Wang}}
+\cfoot{\textcolor{midgray}{\thepage}}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ── Document ──────────────────────────────────────────────────────────────────
+\begin{document}
+
+\begin{center}
+    {\LARGE\bfseries\color{primaryblue}
+        Do LLMs Read 10-Ks Better Than Dictionaries?}\\[6pt]
+    {\large A Staggered Event Study of Financial Text Measures\\
+    and Earnings Announcement Returns}\\[18pt]
+    {\normalsize Yulin (Olivia) Wang}\\
+    {\small MAPSS, University of Chicago}\\[4pt]
+    {\small\textcolor{midgray}{MACS 30113: Large-Scale Computing in the Social Sciences}}\\
+    {\small\textcolor{midgray}{Final Project Proposal · \today}}
+\end{center}
+
+\vspace{0.5em}
+\hrule height 1.5pt
+\vspace{1.5em}
+
+% ── 1. Motivation ─────────────────────────────────────────────────────────────
+\section{Motivation and Research Question}
+
+Annual filings (10-Ks) submitted to the SEC contain rich qualitative information
+about firm performance, risk outlook, and managerial tone. Since
+\citet{LoughranMcDonald2011}, the standard approach for extracting sentiment from
+financial text has been dictionary-based counting: each document is scored by the
+fraction of words belonging to pre-defined word lists (negative, uncertain,
+litigious, etc.). While tractable at scale, this method is bag-of-words by
+construction and cannot capture context, negation, or domain-specific nuance.
+
+Large language models (LLMs) offer a fundamentally different approach: rather
+than counting keywords, they process entire passages and produce semantic
+judgments about tone, uncertainty, and forward-looking orientation. A growing
+body of work suggests LLMs outperform dictionaries in short-window sentiment
+classification tasks \citep{LopezLira2023}, but systematic evidence using a
+rigorous causal identification framework at scale remains limited.
+
+\medskip
+\noindent\textbf{Research Question:} Does LLM-based sentiment scoring of 10-K
+filings predict earnings-announcement abnormal returns more precisely than the
+Loughran--McDonald (L\&M) dictionary method, and does this advantage vary
+systematically across firm size, industry, and macroeconomic environment?
+
+% ── 2. Contribution ───────────────────────────────────────────────────────────
+\section{Contribution}
+
+This project makes three contributions relative to the existing literature:
+
+\begin{enumerate}[leftmargin=1.5em, label=\textbf{\arabic*.}]
+    \item \textbf{Identification strategy.} Existing comparisons of LLM and
+    dictionary measures rely on simple OLS regressions. This paper uses a
+    \emph{staggered event study} design, exploiting the staggered timing of
+    10-K filing dates across firms and years to estimate causal effects on
+    cumulative abnormal returns (CARs) in a difference-in-differences spirit.
+
+    \item \textbf{Scale.} The full analysis covers approximately 50,000--80,000
+    10-K filings (2010--2020) across S\&P 1500 constituents, processed via GPU-
+    accelerated batch inference on a high-performance computing cluster. This
+    scale is necessary to achieve sufficient statistical power for heterogeneity
+    analysis.
+
+    \item \textbf{Multi-dimensional comparison.} Rather than a single sentiment
+    score, both methods are compared along three parallel dimensions: overall
+    \emph{tone}, \emph{uncertainty}, and \emph{forward-looking intensity},
+    enabling a granular assessment of where each approach gains or loses
+    informational content.
+\end{enumerate}
+
+% ── 3. Data ───────────────────────────────────────────────────────────────────
+\section{Data}
+
+\begin{table}[H]
+\centering
+\caption{Data Sources and Variables}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabularx}{\textwidth}{l l X}
+\toprule
+\textbf{Variable} & \textbf{Source} & \textbf{Details} \\
+\midrule
+10-K full text & SEC EDGAR & Full-text search API
+    (\texttt{efts.sec.gov}); MD\&A section extracted via regex \\
+Filing dates \& CIK--ticker map & WRDS / Compustat & \texttt{date\_filed},
+    matched to CRSP permno via CRSP--Compustat link table \\
+Daily stock returns & WRDS / CRSP & \texttt{ret}, value-weighted market
+    return \texttt{vwretd} for excess-return calculation \\
+Firm fundamentals & WRDS / Compustat & Total assets (\texttt{at}), SIC code,
+    book-to-market ratio \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\noindent\textbf{Sample.} S\&P 1500 constituent firms, fiscal years 2010--2020.
+Each observation is a firm-year 10-K filing linked to the corresponding
+earnings-announcement trading window. Firms with fewer than 3 years of
+consecutive data are dropped.
+
+% ── 4. Methodology ────────────────────────────────────────────────────────────
+\section{Methodology}
+
+The analysis proceeds in two sequential steps.
+
+\subsection{Step 1: Text Measurement (Machine Learning)}
+
+\subsubsection{Track A — L\&M Dictionary (Baseline Replicate)}
+
+Following \citet{LoughranMcDonald2011}, each 10-K is scored as:
+\begin{equation}
+    \text{Negative Ratio}_{it} = \frac{\text{\# negative words}}{\text{total words}}, \quad
+    \text{Uncertainty Ratio}_{it} = \frac{\text{\# uncertain words}}{\text{total words}}
+\end{equation}
+Three measures are constructed per filing: \texttt{negative\_ratio},
+\texttt{uncertainty\_ratio}, and \texttt{litigious\_ratio}. These require only
+CPU computation and serve as the benchmark.
+
+\subsubsection{Track B — LLM Scoring (Extension)}
+
+The MD\&A section of each 10-K (typically 2,000--5,000 words) is passed to an
+instruction-tuned LLM for structured inference. The candidate model is
+\textbf{Llama-3-8B-Instruct} (or FinBERT as a lighter alternative), deployed
+via GPU batch inference on the Midway3 HPC cluster. The inference prompt
+requests a JSON-formatted output with three scores:
+
+\begin{center}
+\texttt{\{"tone": [0,1], "uncertainty": [0,1], "forward\_looking": [0,1]\}}
+\end{center}
+
+where each dimension is scored on a continuous $[0,1]$ scale, operationalized
+as follows:
+
+\begin{itemize}[leftmargin=1.5em, noitemsep]
+    \item \textbf{Tone}: overall positivity of managerial language ($0=$ strongly
+    negative, $1=$ strongly positive)
+    \item \textbf{Uncertainty}: degree of hedging and epistemic qualification
+    \item \textbf{Forward-looking Intensity}: density of prospective statements
+    about future performance
+\end{itemize}
+
+Batch inference is parallelized across SLURM job arrays (5,000 filings per
+array element), with AWS free-tier GPU instances used as overflow capacity.
+Expected throughput: $\approx$10,000 documents per GPU-hour.
+
+\subsection{Step 2: Staggered Event Study (Empirical Identification)}
+
+\subsubsection{Abnormal Return Calculation}
+
+For each filing event $(i, t)$, cumulative abnormal returns (CARs) are computed
+over windows $[-1,+1]$ and $[-3,+3]$ relative to the filing date:
+\begin{equation}
+    \text{CAR}_{it}[\tau_1, \tau_2] = \sum_{\tau=\tau_1}^{\tau_2}
+    \bigl(r_{it\tau} - \hat{r}_{it\tau}\bigr)
+\end{equation}
+where $\hat{r}_{it\tau} = \hat{\alpha}_i + \hat{\beta}_i r_{mt\tau}$ is the
+market-model expected return estimated over the pre-event window $[-250, -11]$.
+
+\subsubsection{Main Regression}
+
+The primary specification is:
+\begin{equation}
+    \text{CAR}_{it} = \beta_1 \cdot \text{LLM\_tone}_{it}
+                    + \beta_2 \cdot \text{L\&M\_negative}_{it}
+                    + \gamma' \mathbf{X}_{it}
+                    + \alpha_i + \delta_t + \varepsilon_{it}
+    \label{eq:main}
+\end{equation}
+where $\alpha_i$ are firm fixed effects, $\delta_t$ are year-quarter fixed
+effects, $\mathbf{X}_{it}$ is a vector of controls (log assets, book-to-market,
+leverage), and standard errors are clustered at the firm level.
+
+\subsubsection{Horse-Race Specification}
+
+To directly test the marginal predictive content of LLM scoring over the
+dictionary approach, both measures enter equation~\eqref{eq:main} simultaneously.
+A larger and more precisely estimated $\hat{\beta}_1$ relative to $\hat{\beta}_2$
+is interpreted as evidence that LLM scoring provides incremental information
+beyond word counting.
+
+% ── 5. Heterogeneity ──────────────────────────────────────────────────────────
+\section{Heterogeneity Analysis}
+
+Three pre-registered dimensions of heterogeneity are examined by interacting the
+text measures with indicator variables:
+
+\begin{enumerate}[leftmargin=1.5em, noitemsep, label=\textbf{H\arabic*.}]
+    \item \textbf{Firm size.} Small-cap vs.\ large-cap firms (split at NYSE
+    median market capitalization). LLM measures are hypothesized to show larger
+    gains for small firms, where analyst coverage is sparse and qualitative
+    disclosure carries more incremental weight.
+
+    \item \textbf{Industry.} High-complexity sectors (technology, biotech,
+    finance) vs.\ low-complexity sectors (utilities, materials). Semantic
+    complexity may amplify the dictionary's limitations and LLM's advantages.
+
+    \item \textbf{Macroeconomic environment.} Crisis periods (2010--2011
+    recovery, 2020 COVID shock) vs.\ stable periods. Uncertainty language may
+    be particularly informative during high-volatility regimes.
+\end{enumerate}
+
+% ── 6. Computational Architecture ─────────────────────────────────────────────
+\section{Computational Architecture and Timeline}
+
+\begin{table}[H]
+\centering
+\caption{Four-Week Project Timeline}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabularx}{\textwidth}{c l X}
+\toprule
+\textbf{Week} & \textbf{Focus} & \textbf{Tasks} \\
+\midrule
+1 & Data acquisition
+  & SEC EDGAR bulk download (10-K full texts); WRDS pull for filing dates,
+    CRSP returns, and Compustat fundamentals; data cleaning and CIK--permno
+    merge \\
+2 & Text measurement
+  & L\&M dictionary scoring (CPU); LLM batch inference via Midway3 SLURM job
+    arrays; quality checks on JSON outputs; score distribution validation \\
+3 & Empirical analysis
+  & Market-model CAR estimation; main regression (Eq.\ \ref{eq:main});
+    horse-race specification; robustness checks (alternative windows,
+    winsorization) \\
+4 & Heterogeneity \& write-up
+  & Subgroup regressions (H1--H3); visualization; final report and
+    presentation slides \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\noindent\textbf{Computational resources:}
+\begin{itemize}[leftmargin=1.5em, noitemsep]
+    \item \textbf{Midway3 HPC} (University of Chicago): Primary GPU inference
+    via SLURM job arrays. Target allocation: A100 or V100 nodes, $\sim$20
+    GPU-hours total.
+    \item \textbf{AWS (free-tier, \$50 credit)}: Overflow parallel compute for
+    robustness checks and alternative LLM variants.
+    \item \textbf{Local / Notebook}: Data wrangling, L\&M scoring, regression
+    analysis (\texttt{pyfixest}, \texttt{linearmodels}).
+\end{itemize}
+
+% ── 7. Expected Results ───────────────────────────────────────────────────────
+\section{Expected Results and Significance}
+
+Based on prior literature, the following outcomes are anticipated:
+
+\begin{itemize}[leftmargin=1.5em, noitemsep]
+    \item \textbf{Replicate:} L\&M negative ratio significantly predicts
+    $\text{CAR}[-1,+1]$, consistent with \citet{LoughranMcDonald2011}.
+    \item \textbf{Extension:} LLM-based tone exhibits a larger and more precisely
+    estimated coefficient in the horse-race specification, particularly for
+    short-window CARs where information release is concentrated.
+    \item \textbf{Heterogeneity:} LLM advantage is concentrated among small-cap
+    firms and high-complexity industries, consistent with the hypothesis that
+    semantic depth matters most where dictionary noise is highest.
+\end{itemize}
+
+These findings would contribute actionable guidance for practitioners and
+researchers choosing between text-analysis paradigms, and methodologically
+demonstrate the value of combining large-scale LLM inference with rigorous
+econometric identification.
+
+% ── 8. References ─────────────────────────────────────────────────────────────
+\section*{References}
+\addcontentsline{toc}{section}{References}
+
+\begin{thebibliography}{9}
+
+\bibitem[Loughran and McDonald(2011)]{LoughranMcDonald2011}
+Loughran, T., \& McDonald, B. (2011).
+\newblock When is a liability not a liability? Textual analysis, dictionaries,
+and 10-Ks.
+\newblock \textit{Journal of Finance}, 66(1), 35--65.
+
+\bibitem[Lopez-Lira et al.(2023)]{LopezLira2023}
+Lopez-Lira, A., Tang, Y., \& Ye, Z. (2023).
+\newblock Can ChatGPT forecast stock price movements?
+\newblock \textit{SSRN Working Paper}.
+
+\bibitem[Ke et al.(2019)]{KeKellyXiu2019}
+Ke, Z.~T., Kelly, B.~T., \& Xiu, D. (2019).
+\newblock Predicting returns with text data.
+\newblock \textit{NBER Working Paper No. 26186}.
+
+\bibitem[Huang et al.(2018)]{Huang2018}
+Huang, A.~H., Lehavy, R., Zang, A.~Y., \& Zheng, R. (2018).
+\newblock Analyst information discovery and interpretation roles: A topic
+modeling approach.
+\newblock \textit{Management Science}, 64(6), 2833--2855.
+
+\end{thebibliography}
+
+\end{document}

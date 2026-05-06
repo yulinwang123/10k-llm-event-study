@@ -1,0 +1,47 @@
+# ── Data (WRDS data cannot be shared publicly) ────────────────────────────
+data/
+data_pilot/raw/
+data_pilot/filings/
+data_pilot/processed/*.parquet
+data_pilot/processed/*.csv
+data_pilot/llm_batches/
+
+# Keep a sample MD&A file for illustration
+!data_pilot/filings/.gitkeep
+
+# ── macOS ─────────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+
+# ── LaTeX build artifacts ─────────────────────────────────────────────────
+out/
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.xdv
+
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+*.egg-info/
+
+# ── Unrelated files ───────────────────────────────────────────────────────
+fuck around/
+wsj_business_cycles_proposal.*
+data部分分析.docx
+macs_final/
+
+# ── Large model/binary files ──────────────────────────────────────────────
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# ── Credentials (never commit these) ─────────────────────────────────────
+.env
+secrets.py
