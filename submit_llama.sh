@@ -5,9 +5,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1                    # 1 × A100-40GB is enough for 8B model
+#SBATCH --gres=gpu:1
+#SBATCH --constraint=a100                    # 1 × A100-40GB is enough for 8B model
 #SBATCH --mem=48G
-#SBATCH --time=02:00:00
+#SBATCH --time=00:30:00
 #SBATCH --output=logs/llama_%A_%a.out
 #SBATCH --error=logs/llama_%A_%a.err
 #SBATCH --array=0-2%3                   # 3 shards for pilot; adjust for full run
@@ -21,13 +22,16 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
+export VLLM_ATTENTION_BACKEND=FLASHINFER
+
+module load cuda/12.3
 mkdir -p logs
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 SCRATCH="/scratch/midway3/${USER}"
 MODEL_DIR="${SCRATCH}/models/llama3-8b"
-BATCH_DIR="${SCRATCH}/llm_batches"
-OUT_DIR="${SCRATCH}/llm_out"
+BATCH_DIR="${SCRATCH}/10k_data/10k-project/llm_batches"
+OUT_DIR="${SCRATCH}/10k_data/10k-project/llm_out"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 SHARD=$(printf "%03d" ${SLURM_ARRAY_TASK_ID})
@@ -35,9 +39,8 @@ INPUT="${BATCH_DIR}/batch_${SHARD}.jsonl"
 OUTPUT="${OUT_DIR}/results_${SHARD}.jsonl"
 
 # ── Environment ───────────────────────────────────────────────────────────────
-module load cuda/11.8
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate vllm_env
+VENV="/scratch/midway3/${USER}/vllm_env"
+PYTHON="${VENV}/bin/python"
 
 echo "================================================"
 echo "Job ID:     ${SLURM_JOB_ID}"
@@ -63,7 +66,7 @@ fi
 mkdir -p "${OUT_DIR}"
 
 # ── Run inference ─────────────────────────────────────────────────────────────
-python "${SCRIPT_DIR}/week2_llama_inference.py" \
+"${PYTHON}" "${SCRATCH}/week2_llama_inference.py" \
     --input   "${INPUT}"      \
     --output  "${OUTPUT}"     \
     --model   "${MODEL_DIR}"  \

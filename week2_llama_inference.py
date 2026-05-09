@@ -135,7 +135,8 @@ def parse_json_output(raw: str) -> dict | None:
 
 def validate_scores(d: dict) -> dict:
     """Clamp all score values to [0, 10]."""
-    for key in ["overall_tone", "forward_looking", "uncertainty", "risk_disclosure"]:
+    for key in ["management_optimism", "guidance_specificity",
+                "uncertainty_hedging", "risk_framing"]:
         val = d.get(key)
         try:
             d[key] = max(0, min(10, int(val)))
@@ -157,8 +158,9 @@ def main():
     llm = LLM(
         model=args.model,
         tensor_parallel_size=args.tensor_parallel_size,
-        dtype="bfloat16",
-        gpu_memory_utilization=0.90,
+        dtype="half",
+        gpu_memory_utilization=0.85,
+        enforce_eager=True,
         max_model_len=4096,
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
@@ -167,7 +169,7 @@ def main():
     sampling = SamplingParams(
         temperature=args.temperature,
         max_tokens=args.max_tokens,
-        stop=["}", "\n\n"],    # stop after JSON closes
+        stop=["\n\n"],    # stop after JSON closes
     )
 
     # ── Load records ───────────────────────────────────────────────────────

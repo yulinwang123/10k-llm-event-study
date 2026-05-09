@@ -54,7 +54,7 @@ def main():
     db = wrds.Connection(wrds_username=args.wrds_user)
 
     # ── 1. S&P 1500 universe ──────────────────────────────────────────────────
-    print("\n[1/5] Pulling S&P 1500 universe from Compustat SPIDX...")
+    print("\n[1/5] Pulling S&P 1500 universe from Compustat idxcst_his...")
 
     if args.test:
         # For test mode use hardcoded pilot tickers
@@ -75,14 +75,17 @@ def main():
               AND popsrc = 'D'   AND consol  = 'C'
         """)
     else:
-        # Pull S&P 1500 constituents from SPIDX (index membership table)
+        # Pull S&P 1500 constituents using comp.idxcst_his
+        # gvkeyx = '031855' is S&P Composite 1500 (confirmed: 1500 distinct members)
         sp1500 = db.raw_sql("""
-            SELECT DISTINCT gvkey, tic AS ticker, conm AS company_name
+            SELECT DISTINCT f.gvkey, f.tic AS ticker, f.conm AS company_name
             FROM comp.funda f
             WHERE EXISTS (
-                SELECT 1 FROM comp.spidx s
-                WHERE s.gvkey = f.gvkey
-                  AND s.spii  IN ('S&P 500', 'S&P MidCap 400', 'S&P SmallCap 600')
+                SELECT 1 FROM comp.idxcst_his s
+                WHERE s.gvkey  = f.gvkey
+                  AND s.gvkeyx = '031855'
+                  AND (s.thru IS NULL OR s.thru >= '2010-01-01')
+                  AND s.from   <= '2020-12-31'
             )
             AND indfmt = 'INDL' AND datafmt = 'STD'
             AND popsrc = 'D'   AND consol  = 'C'

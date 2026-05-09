@@ -46,3 +46,6 @@ macs_final/
 .env
 secrets.py
 macs_final
+ec2-key.pem
+lm_scores.parquet
+*.parquet
