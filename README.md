@@ -396,6 +396,30 @@ jupyter notebook analysis_track1234.ipynb
 
 ---
 
+## Midway3 Job Records
+
+Slurm job IDs for the final successful production runs, as required for course verification.
+
+| Job ID | Track | Script | Array | Outcome |
+|--------|-------|--------|-------|---------|
+| `49433115` | Track 2+4 — FinBERT + Sentence-BERT | `scripts/midway3_finbert_embed.py` via `scripts/submit_finbert.sh` | Single job | COMPLETED (exit 0:0) — produced `finbert_scores.parquet` and `embed_similarity.parquet` |
+| `49442040` | Track 3 — Llama-3.1-8B | `week2_llama_inference.py` via `submit_llama.sh` | `--array=0-11%3` (12 tasks, all COMPLETED exit 0:0) | 11,269 / 11,269 filings scored, 0 parse failures |
+
+**Verification commands (run on Midway3):**
+```bash
+# Check job metadata
+sacct -j 49433115,49442040 \
+  --format=JobID,JobName,Partition,State,Elapsed,AllocCPUS,AllocGRES,Start,End
+
+# Confirm output files exist
+ls -lh /scratch/midway3/yulinwang/10k_data/10k-project/llm_out/results_*.jsonl
+wc -l  /scratch/midway3/yulinwang/10k_data/10k-project/llm_out/results_*.jsonl
+```
+
+**GitHub commit history** documents iterative development across all stages — data collection scripts, Midway3 environment debugging, inference script revisions, and analysis notebooks. View at: `https://github.com/<your-repo>/commits/main`
+
+---
+
 ## Analysis Design
 
 ### Four NLP Tracks
