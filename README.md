@@ -396,25 +396,69 @@ jupyter notebook analysis_track1234.ipynb
 
 ---
 
-## Midway3 Job Records
+## Verifiable Trail of Work
 
-Slurm job IDs for the final successful production runs, as required for course verification.
+### Midway3 SLURM Job Records
 
-| Job ID | Track | Script | Array | Outcome |
-|--------|-------|--------|-------|---------|
-| `49433115` | Track 2+4 — FinBERT + Sentence-BERT | `scripts/midway3_finbert_embed.py` via `scripts/submit_finbert.sh` | Single job | COMPLETED (exit 0:0) — produced `finbert_scores.parquet` and `embed_similarity.parquet` |
-| `49442040` | Track 3 — Llama-3.1-8B | `week2_llama_inference.py` via `submit_llama.sh` | `--array=0-11%3` (12 tasks, all COMPLETED exit 0:0) | 11,269 / 11,269 filings scored, 0 parse failures |
+Slurm job IDs for all runs (pilot test + production), as required for course verification.
+
+| Job ID | Description | Script | Array | Outcome |
+|--------|-------------|--------|-------|---------|
+| `49440971` | **Pilot test** — small-sample end-to-end run to verify pipeline before full production | `week2_llama_inference.py` | Single job | COMPLETED (exit 0:0) — confirmed vLLM + V100 + float16 config works |
+| `49433115` | **Production** — Track 2+4: FinBERT + Sentence-BERT | `scripts/midway3_finbert_embed.py` via `scripts/submit_finbert.sh` | Single job | COMPLETED (exit 0:0) — produced `finbert_scores.parquet` and `embed_similarity.parquet` |
+| `49442040` | **Production** — Track 3: Llama-3.1-8B full dataset | `week2_llama_inference.py` via `submit_llama.sh` | `--array=0-11%3` (12 tasks, all COMPLETED exit 0:0) | 11,269 / 11,269 filings scored, 0 parse failures |
 
 **Verification commands (run on Midway3):**
 ```bash
-# Check job metadata
-sacct -j 49433115,49442040 \
+# Check all three job IDs
+sacct -j 49440971,49433115,49442040 \
   --format=JobID,JobName,Partition,State,Elapsed,AllocCPUS,AllocGRES,Start,End
 
-# Confirm output files exist
+# Confirm Llama output files exist (12 shards)
 ls -lh /scratch/midway3/yulinwang/10k_data/10k-project/llm_out/results_*.jsonl
 wc -l  /scratch/midway3/yulinwang/10k_data/10k-project/llm_out/results_*.jsonl
 ```
+
+---
+
+### AWS Usage Verification
+
+#### EC2 — CloudTrail Launch Records
+
+The following command retrieves all EC2 instance launch events tied to this AWS Academy account. The output shows multiple `RunInstances` events attributed to `user5004207=oliviawang011231@gmail.com`, confirming EC2 was used for the EDGAR MD&A download job:
+
+```bash
+aws cloudtrail lookup-events \
+    --lookup-attributes AttributeKey=EventName,AttributeValue=RunInstances \
+    --query 'Events[*].{Time:EventTime,User:Username,Event:EventName}' \
+    --output table
+```
+
+#### S3 — File Inventory with Timestamps
+
+The S3 bucket `yulinwang-10k-llm` holds all pipeline outputs. The listing below confirms 11,404 MD&A text files plus all raw and processed parquet files, with creation timestamps between 2026-05-06 and 2026-05-07:
+
+```bash
+# Full recursive listing (shows timestamps + file sizes)
+aws s3 ls s3://yulinwang-10k-llm/10k-project/ --recursive --human-readable
+
+# Total MD&A file count
+aws s3 ls s3://yulinwang-10k-llm/10k-project/filings/ --recursive | wc -l
+# Expected: ~11,404
+```
+
+Key files in S3 with upload timestamps:
+
+| File | Size | Timestamp |
+|------|------|-----------|
+| `raw/sp1500_universe.parquet` | 33.6 KiB | 2026-05-06 20:08 |
+| `raw/compustat.parquet` | 1.2 MiB | 2026-05-06 20:08 |
+| `raw/crsp_daily.parquet` | 22.2 MiB | 2026-05-06 20:09 |
+| `raw/crsp_market.parquet` | 88.5 KiB | 2026-05-06 20:09 |
+| `raw/mda_metadata.parquet` | 465.4 KiB | 2026-05-07 10:15 |
+| `processed/master_panel.parquet` | 933.3 KiB | 2026-05-07 15:03 |
+| `processed/lm_scores.parquet` | 411.8 KiB | 2026-05-07 20:48 |
+| `filings/` (11,404 MD&A text files) | 30–120 KiB each | 2026-05-06 to 2026-05-07 |
 
 **GitHub commit history** documents iterative development across all stages — data collection scripts, Midway3 environment debugging, inference script revisions, and analysis notebooks. View at: `https://github.com/<your-repo>/commits/main`
 
