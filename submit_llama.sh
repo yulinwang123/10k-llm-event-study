@@ -8,10 +8,10 @@
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=a100                    # 1 × A100-40GB is enough for 8B model
 #SBATCH --mem=48G
-#SBATCH --time=00:30:00
+#SBATCH --time=03:00:00
 #SBATCH --output=logs/llama_%A_%a.out
 #SBATCH --error=logs/llama_%A_%a.err
-#SBATCH --array=0-2%3                   # 3 shards for pilot; adjust for full run
+#SBATCH --array=0-225%12                   # 3 shards for pilot; adjust for full run
 
 # ── Usage ────────────────────────────────────────────────────────────────────
 # First run (pilot, 3 shards of ~20 filings):
