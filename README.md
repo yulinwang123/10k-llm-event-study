@@ -1,144 +1,214 @@
 # Do LLMs Read 10-Ks Better Than Dictionaries?
-### A Staggered Event Study of Financial Text Measures and Earnings Announcement Returns
+### Comparing NLP Approaches to Predict Earnings Announcement Returns
 
-**Course:** MACS 30113 — large-scale computing for the social sciences
+**Course:** MACS 30113 — Large-Scale Computing for the Social Sciences  
 **Author:** Yulin Wang, University of Chicago
 
 ---
 
 ## Research Question
 
-Does replacing bag-of-words dictionary methods with large language model (LLM) inference on 10-K MD&A sections produce text-based sentiment measures that better predict cumulative abnormal returns (CARs) around earnings announcements?
+10-K filings contain a Management Discussion & Analysis (MD&A) section where executives describe the company's performance, outlook, and risks in plain language. Loughran & McDonald (2011) showed that bag-of-words dictionary methods applied to these texts can predict abnormal stock returns around earnings announcements. But dictionaries are blind to context, negation, and nuance.
+
+This project asks: **do more sophisticated NLP methods — neural sentiment (FinBERT), semantic novelty (Sentence-BERT), and large language model scoring (Llama-3.1-8B) — produce text measures that better predict cumulative abnormal returns (CAR) around earnings announcements?** And once we have all four measures in a horse-race regression, which signal survives, and does any of it hold up under causal identification?
 
 ---
 
-## Motivation
+## Pipeline Overview
 
-Loughran & McDonald (2011) showed that word-count-based negativity in 10-K filings predicts stock returns. Yet dictionaries are blind to context: the same word carries different meaning depending on surrounding sentences, and they cannot detect whether management provides *specific* numerical guidance versus vague qualitative language. LLMs may capture these dimensions.
-
----
-
-## High-Level Pipeline
+Data flows through three compute environments:
 
 ```
-SEC EDGAR (10-K filings)          WRDS (Compustat + CRSP)
-        │                                   │
-        ▼                                   ▼
-  MD&A Extraction              Financial Controls + Returns
-  (iXBRL-aware parser)         (gvkey → permno linkage)
-        │                                   │
-        └──────────────┬────────────────────┘
-                       ▼
-              Master Panel (firm × year)
-              stored on AWS S3
-                       │
-          ┌────────────┼────────────┐
-          ▼            ▼            ▼
-    LM Dictionary   FinBERT     Llama-3.1-8B
-    (word counts)  (neural      (zero-shot
-                   sentiment)    scoring)
-          └────────────┼────────────┘
-                       ▼
-            Staggered Event Study
-            CAR[-1,+1] ~ TextMeasure
-              + controls + firm FE
+  Local Mac (VPN)          AWS EC2 (t3.large)       Local Mac
+  local_wrds_pull.py       ec2_edgar_download.py    merge_panel.py
+  WRDS API ──────┐         SEC EDGAR ────────┐      reads S3 ──┐
+                 │ direct upload             │ direct upload   │ writes back
+                 ▼                           ▼                 ▼
+        ┌────────────────────────────────────────────────────────────┐
+        │               AWS S3  (yulinwang-10k-llm)                  │
+        │                                                            │
+        │  10k-project/raw/         ← WRDS parquets (5 files)        │
+        │  10k-project/filings/     ← MD&A text files (~14,000)      │
+        │  10k-project/processed/   ← master_panel.parquet           │
+        └──────────────────────────────┬─────────────────────────────┘
+                                       │ Midway3 pulls via boto3
+                                       ▼
+                        ┌──────────────────────────────┐
+                        │  Midway3 HPC  (macs30113)    │
+                        │  GPU partition (V100 / A100) │
+                        │                              │
+                        │  Track 3: Llama-3.1-8B       │
+                        │  (vLLM, SLURM job array)     │
+                        │                              │
+                        │  Track 2: FinBERT            │
+                        │  Track 4: Sentence-BERT      │
+                        │  (PyTorch, SLURM job array)  │
+                        └──────────────┬───────────────┘
+                                       │ scp results to local
+                                       ▼
+                        ┌──────────────────────────────┐
+                        │  Local Mac — Analysis only   │
+                        │                              │
+                        │  Track 1: LM Dictionary      │
+                        │  compute_car_filing.py       │
+                        │  analysis_track124.ipynb     │
+                        │  analysis_track1234.ipynb    │
+                        └──────────────────────────────┘
 ```
 
 ---
 
-## Data Collection Pipeline
+## Data Sources
 
-Data collection is split across three compute environments due to access restrictions and computational requirements.
+| Source | Access | Content |
+|--------|--------|---------|
+| **WRDS / Compustat** | UChicago VPN required | Annual fundamentals (assets, ROA, leverage, book-to-market), Q4 earnings announcement dates (`rdq`) |
+| **WRDS / CRSP** | UChicago VPN required | Daily stock returns, value-weighted market index, gvkey→permno link |
+| **SEC EDGAR** | Public | Full-text 10-K filings; MD&A extracted via iXBRL-aware parser |
+
+---
+
+## Step-by-Step Execution
+
+### Prerequisites — AWS Credentials
+
+AWS Academy credentials expire every ~4 hours. Refresh before each session:
+
+```bash
+cat > ~/.aws/credentials << 'EOF'
+[default]
+aws_access_key_id=ASIA...
+aws_secret_access_key=...
+aws_session_token=...
+EOF
+aws sts get-caller-identity   # verify
+```
+
+---
 
 ### Step 1 — WRDS Pull (Local Mac, UChicago VPN required)
 
-WRDS data is governed by a license that restricts access to whitelisted IPs. This step must run on a UChicago-networked machine (on campus or via VPN).
+Pulls S&P 1500 universe, Compustat fundamentals, CRSP returns, and the CCM gvkey→permno link. Uploads directly to S3.
 
 ```bash
-# Test mode: 5 tickers (AAPL, MSFT, GOOGL, AMZN, JPM), FY2018–2019
-python scripts/local_wrds_pull.py --bucket <your-s3-bucket> --test
-
-# Full run: S&P 1500, FY2010–2020
-python scripts/local_wrds_pull.py --bucket <your-s3-bucket>
+# Connect to UChicago VPN first
+python scripts/local_wrds_pull.py --bucket yulinwang-10k-llm
 ```
 
-Uploads to S3:
+**Runtime:** 30–60 min  
+**Output on S3:**
 ```
-s3://<bucket>/10k-project/raw/
-├── sp1500_universe.parquet     # S&P 1500 constituent list
-├── compustat.parquet           # Annual fundamentals + rdq (earnings date)
-├── ccm_link.parquet            # gvkey → permno mapping (CRSP-Compustat)
-├── crsp_daily.parquet          # Daily stock returns
-└── crsp_market.parquet         # CRSP value-weighted market index
+s3://yulinwang-10k-llm/10k-project/raw/
+├── sp1500_universe.parquet   # ~2,000 S&P 1500 members (2010–2020)
+├── compustat.parquet         # ~18,000 firm-year fundamentals
+├── ccm_link.parquet          # gvkey → permno mapping
+├── crsp_daily.parquet        # ~6M daily returns
+└── crsp_market.parquet       # VW market index
 ```
 
-### Step 2 — SEC EDGAR Download (AWS EC2 or local)
+---
 
-10-K filings are public. This step can run anywhere, but EC2 is recommended for the full S&P 1500 run (multi-threaded, ~16,500 filings).
+### Step 2 — EDGAR MD&A Download (AWS EC2)
+
+10-K filings are public. EC2 is used for multi-threaded downloading without consuming local bandwidth.
+
+**Launch EC2 (AWS Console):**
+- AMI: Ubuntu Server 22.04 LTS
+- Instance type: `t3.large` (2 vCPU, 8 GB, ~$0.08/hr)
+- Key pair: `ec2-key` (download `.pem`)
 
 ```bash
-# Test mode
-python scripts/ec2_edgar_download.py --bucket <your-s3-bucket> --test
+# Fix key permissions, SSH in
+chmod 400 ec2-key.pem
+ssh -i ec2-key.pem ubuntu@<EC2_PUBLIC_IP>
 
-# Full run on EC2 (16 threads recommended)
-python scripts/ec2_edgar_download.py --bucket <your-s3-bucket> --workers 16
+# On EC2: install dependencies
+sudo apt update -y && sudo apt install -y python3-pip
+pip3 install boto3 pandas pyarrow requests beautifulsoup4 lxml tqdm
+
+# Set AWS credentials (same as Mac), then upload and run script
+# From Mac:
+scp -i ec2-key.pem scripts/ec2_edgar_download.py ubuntu@<EC2_PUBLIC_IP>:~/
+
+# On EC2 — run in background (job persists if SSH disconnects)
+nohup python3 ec2_edgar_download.py \
+    --bucket yulinwang-10k-llm --workers 16 \
+    > edgar.log 2>&1 &
+
+tail -f edgar.log   # monitor
 ```
 
-Uploads to S3:
+**Runtime:** 1–2 hours  
+**Output on S3:**
 ```
-s3://<bucket>/10k-project/
-├── raw/mda_metadata.parquet        # Filing metadata + download status
-└── filings/{ticker}/{year}/        # Raw MD&A text files (.txt)
+s3://yulinwang-10k-llm/10k-project/
+├── raw/mda_metadata.parquet          # filing metadata + download status
+└── filings/{ticker}/{year}/*.txt     # ~14,000 MD&A text files
 ```
 
-The downloader respects the SEC's rate limit (≤10 req/sec), handles retries, and resumes interrupted runs by checking S3 before re-downloading.
+> The downloader respects SEC's rate limit (≤10 req/sec), retries failures, and resumes interrupted runs by checking S3 before re-downloading.
 
-### Step 3 — Merge Master Panel (local or EC2)
+---
 
-Joins WRDS fundamentals with MD&A metadata into a single firm × year panel.
+### Step 3 — Build Master Panel (Local Mac)
+
+Joins WRDS fundamentals, CRSP returns, and MD&A metadata into a single firm × year panel. Reads from and writes back to S3.
 
 ```bash
-python scripts/merge_panel.py --bucket <your-s3-bucket> --test
-python scripts/merge_panel.py --bucket <your-s3-bucket>
+python scripts/merge_panel.py --bucket yulinwang-10k-llm
 ```
 
-Output:
+**Output:**
 ```
-s3://<bucket>/10k-project/processed/master_panel.parquet
+s3://yulinwang-10k-llm/10k-project/processed/master_panel.parquet
 ```
 
-Key columns: `gvkey`, `permno`, `ticker`, `fyear`, `rdq` (earnings announcement date), `s3_key` (path to MD&A text), `log_assets`, `bm_ratio`, `roa`, `leverage`.
+Key columns: `gvkey`, `permno`, `ticker`, `fyear`, `rdq`, `date_filed`, `s3_key` (path to MD&A text), `log_assets`, `bm_ratio`, `roa`, `leverage`, `car_1_1`, `car_3_3`.
 
-### Step 4 — LLM Inference (Midway3 HPC, A100 GPU)
+**Expected shape:** ~11,000–14,000 firm-years after requiring matched MD&A + CRSP coverage.
 
-Llama-3.1-8B-Instruct scores each MD&A on four theory-driven dimensions via
-[`week2_llama_inference.py`](week2_llama_inference.py), submitted as a SLURM
-job array with [`submit_llama.sh`](submit_llama.sh).
+---
 
-#### 4a. One-Time Environment Setup
+### Step 4 — Download Data to Midway3
 
-SSH into Midway3, then run the setup script — or follow the steps below manually
-(the manual path is more robust given Midway3's module naming quirks):
+SSH into Midway3 and download all necessary data from S3 to scratch. AWS CLI is not available on Midway3 — use the Python boto3 downloader.
 
 ```bash
 ssh <cnetid>@midway3.rcc.uchicago.edu
+
+SCRATCH="/scratch/midway3/${USER}"
+mkdir -p ${SCRATCH}/10k_data/10k-project/{raw,processed,filings,llm_batches,llm_out}
+
+# Download via Python (boto3)
+python3 - << 'EOF'
+import boto3, os, pathlib
+s3 = boto3.client('s3')
+bucket = 'yulinwang-10k-llm'
+root   = '/scratch/midway3/' + os.environ['USER'] + '/10k_data/10k-project'
+
+for key in ['10k-project/processed/master_panel.parquet',
+            '10k-project/raw/crsp_daily.parquet',
+            '10k-project/raw/crsp_market.parquet']:
+    dest = root + '/' + key.replace('10k-project/', '')
+    pathlib.Path(dest).parent.mkdir(parents=True, exist_ok=True)
+    s3.download_file(bucket, key, dest)
+    print(f'✓ {key}')
+
+# Download all MD&A text files
+paginator = s3.get_paginator('list_objects_v2')
+for page in paginator.paginate(Bucket=bucket, Prefix='10k-project/filings/'):
+    for obj in page.get('Contents', []):
+        dest = root + '/' + obj['Key'].replace('10k-project/', '')
+        pathlib.Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        if not os.path.exists(dest):
+            s3.download_file(bucket, obj['Key'], dest)
+print('✓ All filings downloaded')
+EOF
 ```
 
-**Install Miniconda to home directory** (`module load python` does not expose
-`conda` on Midway3 login nodes):
+---
 
-```bash
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
-     -O ~/miniconda.sh
-bash ~/miniconda.sh -b -p ~/miniconda3
-~/miniconda3/bin/conda init bash
-source ~/.bashrc
-conda tos accept --override-channels --channel defaults
-conda tos accept --override-channels --channel conda-forge
-```
-
-**Create the conda environment in `$SCRATCH`** (home quota is only ~30 GB;
-vLLM + PyTorch exceed it):
+### Step 5 — Midway3 Environment Setup (One-Time)
 
 ```bash
 SCRATCH="/scratch/midway3/${USER}"
@@ -146,177 +216,218 @@ export PIP_CACHE_DIR="${SCRATCH}/pip_cache"
 export TMPDIR="${SCRATCH}/tmp"
 mkdir -p $PIP_CACHE_DIR $TMPDIR
 
-conda create -y -p ${SCRATCH}/vllm_env python=3.11
-conda activate ${SCRATCH}/vllm_env
-```
+# Create venv under SCRATCH (home quota ~30 GB is too small for vLLM + PyTorch)
+python3 -m venv ${SCRATCH}/vllm_env
+source ${SCRATCH}/vllm_env/bin/activate
 
-**Load CUDA and install PyTorch + vLLM:**
-
-```bash
-module load cuda/12.4
-pip install torch --index-url https://download.pytorch.org/whl/cu124
+module load cuda/12.3
+pip install torch --index-url https://download.pytorch.org/whl/cu121
 pip install setuptools_scm numpy
-pip install vllm --no-build-isolation
-pip install transformers accelerate huggingface_hub
+pip install vllm==0.11.2 --no-build-isolation
+pip install transformers==4.57.6 accelerate huggingface_hub
+pip install sentence-transformers pandas pyarrow tqdm boto3
 ```
 
-> **Gotcha — V100 vs A100:** If your job lands on a V100 (compute capability 7.0),
-> vLLM will crash with `Bfloat16 is only supported on GPUs with compute capability >= 8.0`.
-> The fix is already in [`submit_llama.sh`](submit_llama.sh): add
-> `--constraint=a100` to the `sbatch` call to target A100 nodes only.
+> **GPU compatibility note:** V100 nodes (compute capability 7.0) do not support bfloat16. The scripts use `dtype="half"` (float16) which works on both V100 and A100. Do **not** add `--constraint=a100` unless you want to wait in a longer queue.
 
-#### 4b. Download Model Weights
-
-Request access to `meta-llama/Meta-Llama-3.1-8B-Instruct` on
-[HuggingFace](https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct),
-then:
-
+**Download Llama model weights (~16 GB):**
 ```bash
-conda activate ${SCRATCH}/vllm_env
-huggingface-cli login          # paste your HF token when prompted
+source ${SCRATCH}/vllm_env/bin/activate
+huggingface-cli login   # paste HF token
 huggingface-cli download meta-llama/Meta-Llama-3.1-8B-Instruct \
     --local-dir ${SCRATCH}/models/Meta-Llama-3.1-8B-Instruct \
     --local-dir-use-symlinks False
 ```
 
-Download is ~16 GB and takes about 15 minutes on Midway3's fast scratch I/O.
+---
 
-#### 4c. Upload Batch Files and Submit
+### Step 6 — Track 3: Llama Inference (Midway3, SLURM)
 
-The notebook [`notebooks/week2_text_measures.ipynb`](notebooks/week2_text_measures.ipynb)
-writes JSONL shards to `data_pilot/llm_batches/batch_NNN.jsonl`. Upload them
-and submit the job array:
+Prepare batch JSONL files (shard size 1000, for job array limit of 12):
 
 ```bash
-# From your local Mac
-scp data_pilot/llm_batches/batch_*.jsonl \
-    midway3.rcc.uchicago.edu:${SCRATCH}/llm_batches/
+# On Midway3
+source ${SCRATCH}/vllm_env/bin/activate
+python scripts/prepare_llama_batches.py \
+    --data-root ${SCRATCH}/10k_data/10k-project \
+    --shard-size 1000
 
-# On Midway3 — check shard count, then update --array in submit_llama.sh
-ls ${SCRATCH}/llm_batches/batch_*.jsonl | wc -l
-
-# Submit (pilot: 3 shards; full run: adjust --array=0-249%10)
-sbatch --constraint=a100 submit_llama.sh
+# Check output
+ls ${SCRATCH}/10k_data/10k-project/llm_batches/ | wc -l   # should be ~12
 ```
 
-Monitor progress:
+Submit the job array:
 ```bash
+sbatch --array=0-11%3 submit_llama.sh
+squeue -u $USER   # monitor
+```
+
+**Output:** `${SCRATCH}/10k_data/10k-project/llm_out/results_000.jsonl` through `results_011.jsonl`  
+Each line: `{"gvkey": ..., "fyear": ..., "scores": {"management_optimism": 7, "guidance_specificity": 4, "uncertainty_hedging": 5, "risk_framing": 3}}`
+
+Download results to local:
+```bash
+# From Mac
+scp -r <cnetid>@midway3.rcc.uchicago.edu:${SCRATCH}/10k_data/10k-project/llm_out/ \
+    "data/llm_out/"
+```
+
+---
+
+### Step 7 — Track 2 & 4: FinBERT + Sentence-BERT (Midway3, SLURM)
+
+```bash
+# On Midway3
+sbatch scripts/submit_finbert.sh
 squeue -u $USER
-cat logs/llama_<jobid>_0.out    # output for shard 0
 ```
 
-#### 4d. Output Format
+This runs `scripts/midway3_finbert_embed.py`, which computes:
+- **Track 2:** FinBERT sentence-level sentiment → `fb_net` = P(positive) − P(negative)
+- **Track 4:** Sentence-BERT year-over-year cosine similarity → `embed_novelty` = 1 − cosine similarity
 
-Each shard produces a `.jsonl` results file in `${SCRATCH}/llm_out/`. Each line:
-
-```json
-{"ticker": "AAPL", "fyear": 2019, "accession_no": "0000320193-20-000001",
- "management_optimism": 7, "guidance_specificity": 9,
- "uncertainty_hedging": 3, "risk_framing": 2}
+Download results to local:
+```bash
+# From Mac
+scp <cnetid>@midway3.rcc.uchicago.edu:${SCRATCH}/10k_data/10k-project/processed/finbert_scores.parquet data/
+scp <cnetid>@midway3.rcc.uchicago.edu:${SCRATCH}/10k_data/10k-project/processed/embed_similarity.parquet data/
 ```
 
-The notebook merges these back into the master panel via the `accession_no` key.
+---
 
-### Step 5 — Text Measures + Event Study (Jupyter)
+### Step 8 — CAR Computation (Local Mac)
+
+Compute cumulative abnormal returns (market-adjusted) around **both** event dates:
 
 ```bash
-# Track 1 (LM Dictionary) + Track 2 (FinBERT) + merge Llama results
-jupyter notebook notebooks/week2_text_measures.ipynb
+# CAR around rdq (earnings announcement date) — computed inside analysis_track124.ipynb
 
-# Week 3: CAR calculation + regression
-jupyter notebook notebooks/week3_event_study.ipynb
+# CAR around date_filed (10-K filing date) — robustness check
+python scripts/compute_car_filing.py
+# Output: data/car_filing_date.parquet
+```
+
+Uses `data/crsp_daily.parquet` and `data/crsp_market.parquet` already downloaded locally.
+
+---
+
+### Step 9 — Analysis Notebooks (Local Mac)
+
+Run in order:
+
+```bash
+# Step 9a: Track 1 (LM Dictionary) + Track 2 (FinBERT) + Track 4 (SBERT)
+# Computes CAR[−1,+1] and CAR[−3,+3] around rdq
+# Output: data/analysis_panel.parquet
+jupyter notebook analysis_track124.ipynb
+
+# Step 9b: Add Track 3 (Llama), horse-race, causal identification, robustness
+jupyter notebook analysis_track1234.ipynb
 ```
 
 ---
 
-## Text Measures
+## Compute Environment Summary
 
-| Track | Model | Key Metric | Advantage over LM Dict |
-|-------|-------|------------|------------------------|
-| 1 | Loughran-McDonald (2011) | `lm_net_sent` = (pos−neg)/total | Baseline |
-| 2 | FinBERT (`ProsusAI/finbert`) | `fb_net` = P(pos)−P(neg) | Contextual sentence-level |
-| 3 | Llama-3.1-8B-Instruct (vLLM) | 4-dim score vector | Guidance specificity, risk framing |
-
-The key differentiator for Track 3 is **`guidance_specificity`** — whether management provides concrete numerical targets — which has no LM Dictionary equivalent and may reduce information asymmetry.
+| Task | Where | Why |
+|------|-------|-----|
+| WRDS data pull | Local Mac (UChicago VPN) | License restricts to whitelisted IPs |
+| SEC EDGAR download | AWS EC2 (`t3.large`) | Multi-threaded, public data, persistent background job |
+| Intermediate storage | AWS S3 (`yulinwang-10k-llm`) | Shared across Mac / EC2 / Midway3 |
+| Llama-3.1-8B inference | Midway3 GPU (`macs30113`) | 80 GB VRAM, vLLM batch throughput |
+| FinBERT + Sentence-BERT | Midway3 GPU (`macs30113`) | PyTorch GPU acceleration |
+| CAR computation & regression | Local Mac | Interactive, all data fits in memory |
 
 ---
 
-## Sample
+## Analysis Design
 
-- **Pilot:** 20 S&P 500 firms × FY2018–2020 = 59 firm-years
-- **Full:** S&P 1500 × FY2010–2020 ≈ 16,500 firm-years (in progress)
+### Four NLP Tracks
+
+| Track | Method | Key Variable | What It Measures |
+|-------|--------|--------------|-----------------|
+| T1 | Loughran-McDonald Dictionary | `lm_tone` = (pos−neg)/total | Bag-of-words surface sentiment |
+| T2 | FinBERT (`ProsusAI/finbert`) | `fb_net` = P(pos)−P(neg) | Contextual neural sentiment |
+| T3 | Llama-3.1-8B-Instruct (vLLM) | `llm_optimism`, `llm_specificity`, `llm_hedging`, `llm_risk` | LLM multidimensional scoring |
+| T4 | Sentence-BERT (`all-mpnet-base-v2`) | `embed_novelty` = 1 − cos_sim(t, t−1) | Year-over-year semantic novelty |
+
+### Regression Strategy
+
+All regressions use OLS with industry (2-digit SIC) + year fixed effects and firm-clustered standard errors. Variables are z-score standardized for cross-track comparability. Sample: S&P 1500, FY2010–2020, N ≈ 9,735 firm-years.
+
+**M1–M4:** Each track estimated separately (standalone R²)  
+**MC (Horse-Race):** All 8 NLP variables compete simultaneously — tests which signal survives head-to-head  
+**MD:** Robustness with CAR[−3,+3]
+
+### Causal Identification
+
+OLS with FE does not rule out time-varying firm-level confounders (e.g., persistently optimistic management at persistently good companies). Two strategies:
+
+**First Difference (FD):** Regress CAR on year-over-year *changes* in NLP scores. Removes all time-invariant firm heterogeneity.
+
+**IV / 2SLS:** Instrument each firm's LLM optimism with the leave-one-out mean of peers in the same 2-digit SIC × year cell. First-stage F = 116 (strong instrument). Tests whether industry-driven variation in optimism causally predicts CAR.
+
+### Robustness Checks
+
+**CAR[−3,+3]:** Wider event window (Model MD)
+
+**date_filed event window:** Recompute CAR around the 10-K filing date instead of the earnings announcement date. Tests whether text carries *incremental* information beyond what markets price on announcement day.
 
 ---
 
 ## Repository Structure
 
 ```
-├── notebooks/
-│   ├── week1_pilot_fixed.ipynb       # Pilot data collection (SEC + WRDS)
-│   ├── week1_data_collection.ipynb   # Full-scale data collection
-│   ├── week2_text_measures.ipynb     # LM Dict + FinBERT + Llama prep
-│   └── week3_event_study.ipynb       # CAR calculation + regressions (TODO)
-│
 ├── scripts/
-│   ├── local_wrds_pull.py            # Step 1: WRDS → S3 (run on VPN)
-│   ├── ec2_edgar_download.py         # Step 2: SEC EDGAR → S3 (EC2 / local)
-│   └── merge_panel.py                # Step 3: S3 merge → master panel
+│   ├── local_wrds_pull.py          # Step 1: WRDS → S3
+│   ├── ec2_edgar_download.py       # Step 2: SEC EDGAR → S3 (run on EC2)
+│   ├── merge_panel.py              # Step 3: S3 → master_panel.parquet
+│   ├── prepare_llama_batches.py    # Step 6: build JSONL shards for Llama
+│   ├── midway3_finbert_embed.py    # Step 7: FinBERT + SBERT (Midway3)
+│   ├── submit_finbert.sh           # SLURM submission for FinBERT/SBERT
+│   └── compute_car_filing.py       # Step 8: CAR around date_filed
 │
-├── week2_llama_inference.py          # Step 4: vLLM batch inference (Midway3)
-├── submit_llama.sh                   # SLURM job array submission
-├── setup_midway3.sh                  # One-time Midway3 environment setup
+├── week2_llama_inference.py        # Step 6: vLLM inference script (Midway3)
+├── submit_llama.sh                 # SLURM job array for Llama
+├── setup_midway3.sh                # One-time Midway3 environment setup
 │
-├── proposal_10k_llm_eventstudy.tex   # Research proposal (LaTeX)
-└── data_pilot/                       # Pilot data (gitignored except structure)
+├── analysis_track124.ipynb         # Step 9a: Track 1/2/4 + CAR computation
+├── analysis_track1234.ipynb        # Step 9b: All tracks + causal ID + robustness
+│
+├── data/                           # Local data (gitignored)
+│   ├── master_panel.parquet
+│   ├── crsp_daily.parquet
+│   ├── crsp_market.parquet
+│   ├── lm_scores.parquet
+│   ├── finbert_scores.parquet
+│   ├── embed_similarity.parquet
+│   ├── analysis_panel.parquet
+│   ├── analysis_panel_1234.parquet
+│   ├── car_filing_date.parquet
+│   ├── regression_results_1234.csv
+│   └── llm_out/                    # results_000.jsonl … results_011.jsonl
+│
+├── LM_MasterDictionary.csv         # Loughran-McDonald word list
+└── proposal_10k_llm_eventstudy.tex # Research proposal
 ```
-
-Key files with inline links:
-[`scripts/local_wrds_pull.py`](scripts/local_wrds_pull.py) ·
-[`scripts/ec2_edgar_download.py`](scripts/ec2_edgar_download.py) ·
-[`scripts/merge_panel.py`](scripts/merge_panel.py) ·
-[`week2_llama_inference.py`](week2_llama_inference.py) ·
-[`submit_llama.sh`](submit_llama.sh) ·
-[`setup_midway3.sh`](setup_midway3.sh)
-
----
-
-## Infrastructure
-
-| Task | Where | Why |
-|------|-------|-----|
-| WRDS data pull | Local Mac (UChicago VPN) | License restricts to whitelisted IPs |
-| SEC EDGAR download | AWS EC2 (`t3.large`) or local | Multi-threaded, public data, no IP restriction |
-| Data storage | AWS S3 | Shared across Mac / EC2 / Midway3 |
-| LLM inference | Midway3 A100 GPU (account: `macs30113`) | 80 GB VRAM, vLLM batch throughput |
-| Analysis / notebooks | Local Mac | Interactive exploration |
-
-**Midway3 environment notes:**
-- Conda must be installed manually via Miniconda (module load python does not expose `conda`)
-- Create the conda env under `$SCRATCH`, not `$HOME` — home quota (30 GB) is too small for vLLM + PyTorch
-- Always add `--constraint=a100` to `sbatch`; V100 nodes do not support bfloat16 and will crash
-- Set `PIP_CACHE_DIR` and `TMPDIR` to `$SCRATCH` before installing to avoid home quota overflow
 
 ---
 
 ## Dependencies
 
-**Local / EC2:**
+**Local Mac / EC2:**
 ```bash
-pip install wrds boto3 pandas pyarrow requests beautifulsoup4 lxml tqdm
+pip install wrds boto3 pandas pyarrow requests beautifulsoup4 lxml tqdm scipy statsmodels seaborn
 ```
 
-**Midway3 (GPU environment in `$SCRATCH`):**
+**Midway3 (GPU environment under `$SCRATCH`):**
 ```bash
-# Must install PyTorch before vLLM to avoid CUDA version conflicts
-module load cuda/12.4
-conda create -p $SCRATCH/vllm_env python=3.11
-conda activate $SCRATCH/vllm_env
-export PIP_CACHE_DIR=$SCRATCH/pip_cache
-export TMPDIR=$SCRATCH/tmp
-pip install torch --index-url https://download.pytorch.org/whl/cu124
+module load cuda/12.3
+pip install torch --index-url https://download.pytorch.org/whl/cu121
 pip install setuptools_scm numpy
-pip install vllm --no-build-isolation
-pip install transformers accelerate huggingface_hub
+pip install vllm==0.11.2 --no-build-isolation
+pip install transformers==4.57.6 accelerate huggingface_hub
+pip install sentence-transformers pandas pyarrow tqdm boto3
 ```
 
 ---
@@ -324,5 +435,7 @@ pip install transformers accelerate huggingface_hub
 ## References
 
 - Loughran, T. & McDonald, B. (2011). When is a liability not a liability? *Journal of Finance*, 66(1), 35–65.
-- Touvron, H. et al. (2023). Llama 2: Open Foundation and Fine-Tuned Chat Models. *arXiv*.
-- Yang, Y. et al. (2020). FinBERT: A Pretrained Language Model for Financial Communications. *arXiv*.
+- Yang, Y. et al. (2020). FinBERT: A Pretrained Language Model for Financial Communications. *arXiv:2006.08097*.
+- Reimers, N. & Gurevych, I. (2019). Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks. *EMNLP 2019*.
+- Dubey, A. et al. (2024). The Llama 3 Herd of Models. *arXiv:2407.21783*.
+- Ball, R. & Brown, P. (1968). An Empirical Evaluation of Accounting Income Numbers. *Journal of Accounting Research*, 6(2), 159–178.
