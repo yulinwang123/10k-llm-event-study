@@ -228,49 +228,105 @@ pip install transformers==4.57.6 accelerate huggingface_hub
 pip install sentence-transformers pandas pyarrow tqdm boto3
 ```
 
-> **GPU compatibility note:** V100 nodes (compute capability 7.0) do not support bfloat16. The scripts use `dtype="half"` (float16) which works on both V100 and A100. Do **not** add `--constraint=a100` unless you want to wait in a longer queue.
+> **GPU compatibility note:** V100 nodes (compute capability 7.0) do not support bfloat16. The scripts use `dtype="half"` (float16) which works on both V100 and A100. Do **not** add `--constraint=a100` to avoid long queue waits — the float16 fix handles compatibility.
 
-**Download Llama model weights (~16 GB):**
+> **transformers version pin:** vLLM 0.11.2 requires `transformers==4.57.6`. Installing a newer transformers version causes incompatibility errors at model load time.
+
+**Download Llama model weights (~16 GB, one-time):**
 ```bash
 source ${SCRATCH}/vllm_env/bin/activate
-huggingface-cli login   # paste HF token
+huggingface-cli login   # paste HF token (request access at huggingface.co/meta-llama)
 huggingface-cli download meta-llama/Meta-Llama-3.1-8B-Instruct \
     --local-dir ${SCRATCH}/models/Meta-Llama-3.1-8B-Instruct \
     --local-dir-use-symlinks False
+# Download takes ~15 min on Midway3 fast scratch I/O
 ```
 
 ---
 
-### Step 6 — Track 3: Llama Inference (Midway3, SLURM)
+### Step 6 — Track 3: Llama-3.1-8B Inference (Midway3, SLURM)
 
-Prepare batch JSONL files (shard size 1000, for job array limit of 12):
+#### Model and Inference Engine
+
+**Model:** [`meta-llama/Meta-Llama-3.1-8B-Instruct`](https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct)  
+An 8-billion parameter instruction-tuned language model from Meta. Chosen for its strong instruction-following on structured JSON output tasks and its ability to run on a single A100/V100 GPU (40 GB VRAM). Access requires approval at HuggingFace.
+
+**Inference engine:** [`vLLM`](https://github.com/vllm-project/vllm) v0.11.2  
+vLLM enables high-throughput batched inference via PagedAttention, making it ~10–20× faster than HuggingFace `generate()` for large batches. Configuration used:
+```python
+LLM(model=model_path,
+    dtype="half",              # float16 — required for V100 compatibility
+    gpu_memory_utilization=0.85,
+    enforce_eager=True,
+    max_model_len=4096)
+SamplingParams(temperature=0.0,   # greedy decoding — fully deterministic output
+               max_tokens=128,
+               stop=["\n\n"])
+```
+
+#### Scoring Dimensions
+
+Each MD&A excerpt (first 6,000 characters ≈ 1,200 tokens) is scored on four theory-driven dimensions via a zero-shot structured prompt. The model returns a JSON object with integer scores 0–10:
+
+| Dimension | Variable | What it measures |
+|-----------|----------|-----------------|
+| `management_optimism` | `llm_optimism` | Forward-looking sentiment: 0 = strongly pessimistic, 10 = strongly confident |
+| `guidance_specificity` | `llm_specificity` | Concreteness of forward guidance: 0 = only vague qualitative language, 10 = detailed numerical targets and timelines |
+| `uncertainty_hedging` | `llm_hedging` | Density of hedging language ("may", "could", "subject to change"): 0 = confident/certain, 10 = constant qualification |
+| `risk_framing` | `llm_risk` | How risks are framed relative to opportunities: 0 = risks downplayed/manageable, 10 = risks prominent and threatening |
+
+The key innovation over Track 1 (LM Dictionary) is `guidance_specificity` — whether management provides concrete numerical targets — which has no dictionary equivalent and directly reduces information asymmetry for investors.
+
+#### System Prompt Design
+
+The prompt instructs the model to act as a financial economist, score exactly four dimensions, and return **only** a JSON object with no additional text. This structured output format enables deterministic parsing and near-100% parse success rate across 11,269 filings. The full prompt is in [`week2_llama_inference.py`](week2_llama_inference.py) (`SYSTEM_PROMPT` constant).
+
+#### Batch Preparation and SLURM Submission
+
+Midway3 limits each account to 12 concurrent array jobs. Shards of 1,000 filings each produce 12 batch files for the full 11,269-filing dataset:
 
 ```bash
 # On Midway3
 source ${SCRATCH}/vllm_env/bin/activate
+
+# Step 6a: Build JSONL batch files
 python scripts/prepare_llama_batches.py \
     --data-root ${SCRATCH}/10k_data/10k-project \
     --shard-size 1000
+ls ${SCRATCH}/10k_data/10k-project/llm_batches/ | wc -l   # should be 12
 
-# Check output
-ls ${SCRATCH}/10k_data/10k-project/llm_batches/ | wc -l   # should be ~12
-```
-
-Submit the job array:
-```bash
+# Step 6b: Submit job array (max 3 concurrent to respect GPU quota)
 sbatch --array=0-11%3 submit_llama.sh
-squeue -u $USER   # monitor
+squeue -u $USER   # monitor; each shard takes ~20 min on V100
 ```
 
-**Output:** `${SCRATCH}/10k_data/10k-project/llm_out/results_000.jsonl` through `results_011.jsonl`  
-Each line: `{"gvkey": ..., "fyear": ..., "scores": {"management_optimism": 7, "guidance_specificity": 4, "uncertainty_hedging": 5, "risk_framing": 3}}`
+SLURM configuration ([`submit_llama.sh`](submit_llama.sh)):
+- 1 GPU, 8 CPUs, 48 GB RAM per array task
+- 3-hour time limit per shard
+- `VLLM_ATTENTION_BACKEND=FLASHINFER` for memory efficiency
+
+For large re-runs (e.g., if shard size changes), [`submit_llama_full.sh`](submit_llama_full.sh) automates sequential batch submission — it submits 12 jobs, waits for completion, then submits the next 12.
+
+**Output:** `llm_out/results_000.jsonl` through `results_011.jsonl`  
+Each line:
+```json
+{"gvkey": "001722", "fyear": 2015, "ticker": "AAPL",
+ "scores": {"management_optimism": 7, "guidance_specificity": 5,
+            "uncertainty_hedging": 3, "risk_framing": 2}}
+```
+Parse success rate: **100%** (11,269 / 11,269) — greedy decoding + structured prompt eliminates malformed outputs.
 
 Download results to local:
 ```bash
-# From Mac
 scp -r <cnetid>@midway3.rcc.uchicago.edu:${SCRATCH}/10k_data/10k-project/llm_out/ \
     "data/llm_out/"
 ```
+
+#### Key Resources
+
+- Model card: https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct
+- vLLM documentation: https://docs.vllm.ai
+- Llama 3 technical report: Dubey et al. (2024), *arXiv:2407.21783*
 
 ---
 
