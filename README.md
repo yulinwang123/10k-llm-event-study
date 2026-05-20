@@ -72,7 +72,7 @@ Data flows through three compute environments:
 
 ### Prerequisites — AWS Credentials
 
-AWS Academy credentials expire every ~4 hours. Refresh before each session:
+This project uses AWS Academy, which issues temporary session credentials that expire every ~4 hours. Before running any step that touches S3 or EC2, refresh credentials from the AWS Academy portal (Details → CLI) and paste them into `~/.aws/credentials`:
 
 ```bash
 cat > ~/.aws/credentials << 'EOF'
@@ -81,14 +81,16 @@ aws_access_key_id=ASIA...
 aws_secret_access_key=...
 aws_session_token=...
 EOF
-aws sts get-caller-identity   # verify
+aws sts get-caller-identity   # verify — should return your account ID
 ```
 
 ---
 
 ### Step 1 — WRDS Pull (Local Mac, UChicago VPN required)
 
-Pulls S&P 1500 universe, Compustat fundamentals, CRSP returns, and the CCM gvkey→permno link. Uploads directly to S3.
+Queries the Wharton Research Data Services (WRDS) API to pull four datasets that form the financial backbone of the event study: the S&P 1500 index membership list (2010–2020) that defines the firm universe; Compustat annual fundamentals (assets, earnings, leverage, book-to-market) used as regression controls; CRSP daily stock returns and the value-weighted market index needed to compute cumulative abnormal returns; and the CRSP-Compustat Merged (CCM) link table that maps Compustat `gvkey` identifiers to CRSP `permno` identifiers, bridging the two databases at the firm level.
+
+WRDS access is licensed to UChicago and restricted to whitelisted IP addresses, so this step must run on a local machine connected to the UChicago VPN — it cannot be run from EC2 or Midway3. All five output files are uploaded directly to S3, which serves as the shared data store across the three compute environments.
 
 ```bash
 # Connect to UChicago VPN first
@@ -110,7 +112,9 @@ s3://yulinwang-10k-llm/10k-project/raw/
 
 ### Step 2 — EDGAR MD&A Download (AWS EC2)
 
-10-K filings are public. EC2 is used for multi-threaded downloading without consuming local bandwidth.
+Downloads the full text of 10-K annual filings for every firm-year in the S&P 1500 universe from the SEC's EDGAR system. For each filing, the script locates the document on EDGAR's full-text search index, fetches the HTML/iXBRL file, and extracts the Management Discussion & Analysis (MD&A) section — the portion of the 10-K where executives describe business performance, strategy, and risks in natural language. Extracted text is written as plain `.txt` files directly to S3.
+
+SEC EDGAR is public data with no IP restriction, so EC2 is chosen purely for operational reasons: downloading ~14,000 filings with 16 parallel workers takes 1–2 hours and would monopolize local bandwidth. Running the job on EC2 with `nohup` lets it continue in the background even after the SSH session disconnects. The script respects SEC's rate limit (≤10 req/sec), retries transient failures automatically, and resumes interrupted runs by checking S3 before re-downloading each file.
 
 **Launch EC2 (AWS Console):**
 - AMI: Ubuntu Server 22.04 LTS
@@ -126,33 +130,30 @@ ssh -i ec2-key.pem ubuntu@<EC2_PUBLIC_IP>
 sudo apt update -y && sudo apt install -y python3-pip
 pip3 install boto3 pandas pyarrow requests beautifulsoup4 lxml tqdm
 
-# Set AWS credentials (same as Mac), then upload and run script
-# From Mac:
+# From Mac: upload the download script to EC2
 scp -i ec2-key.pem scripts/ec2_edgar_download.py ubuntu@<EC2_PUBLIC_IP>:~/
 
-# On EC2 — run in background (job persists if SSH disconnects)
+# On EC2 — run in background (job continues after SSH disconnect)
 nohup python3 ec2_edgar_download.py \
     --bucket yulinwang-10k-llm --workers 16 \
     > edgar.log 2>&1 &
 
-tail -f edgar.log   # monitor
+tail -f edgar.log   # monitor progress
 ```
 
 **Runtime:** 1–2 hours  
 **Output on S3:**
 ```
 s3://yulinwang-10k-llm/10k-project/
-├── raw/mda_metadata.parquet          # filing metadata + download status
-└── filings/{ticker}/{year}/*.txt     # ~14,000 MD&A text files
+├── raw/mda_metadata.parquet          # filing metadata + download status per firm-year
+└── filings/{ticker}/{year}/*.txt     # ~14,000 MD&A plain-text files
 ```
-
-> The downloader respects SEC's rate limit (≤10 req/sec), retries failures, and resumes interrupted runs by checking S3 before re-downloading.
 
 ---
 
 ### Step 3 — Build Master Panel (Local Mac)
 
-Joins WRDS fundamentals, CRSP returns, and MD&A metadata into a single firm × year panel. Reads from and writes back to S3.
+Assembles the three data sources into a single analysis-ready firm × year panel by joining Compustat fundamentals and CRSP returns (via the CCM gvkey→permno link) with the EDGAR filing metadata, producing one row per firm-year. This is also where the event-study outcome variable is constructed: cumulative abnormal return (CAR), defined as the sum of daily market-adjusted returns over the three-day window [−1, +1] around the 10-K filing date. Market-adjusted return subtracts the CRSP value-weighted market return from each day's firm return, removing common market movements so that any remaining return reflects firm-specific news from the filing. The merged panel is written back to S3 for use by all downstream steps.
 
 ```bash
 python scripts/merge_panel.py --bucket yulinwang-10k-llm
@@ -163,7 +164,7 @@ python scripts/merge_panel.py --bucket yulinwang-10k-llm
 s3://yulinwang-10k-llm/10k-project/processed/master_panel.parquet
 ```
 
-Key columns: `gvkey`, `permno`, `ticker`, `fyear`, `rdq`, `date_filed`, `s3_key` (path to MD&A text), `log_assets`, `bm_ratio`, `roa`, `leverage`, `car_1_1`, `car_3_3`.
+Key columns: `gvkey`, `permno`, `ticker`, `fyear`, `rdq` (earnings announcement date), `date_filed` (10-K filing date), `s3_key` (S3 path to MD&A text), `log_assets`, `bm_ratio`, `roa`, `leverage`, `car_filed_1_1`, `car_filed_3_3`.
 
 **Expected shape:** ~11,000–14,000 firm-years after requiring matched MD&A + CRSP coverage.
 
@@ -171,7 +172,7 @@ Key columns: `gvkey`, `permno`, `ticker`, `fyear`, `rdq`, `date_filed`, `s3_key`
 
 ### Step 4 — Download Data to Midway3
 
-SSH into Midway3 and download all necessary data from S3 to scratch. AWS CLI is not available on Midway3 — use the Python boto3 downloader.
+Transfers the master panel and all MD&A text files from S3 to Midway3's scratch storage so the GPU jobs in Steps 6 and 7 can read them locally rather than streaming from S3. Midway3 does not have the AWS CLI installed, so the transfer uses a short `boto3` script instead. Data is placed under `/scratch/midway3/${USER}/` rather than the home directory because the home quota (~30 GB) is too small for the full dataset and the Llama model weights (~16 GB).
 
 ```bash
 ssh <cnetid>@midway3.rcc.uchicago.edu
@@ -209,6 +210,8 @@ EOF
 ---
 
 ### Step 5 — Midway3 Environment Setup (One-Time)
+
+Creates an isolated Python virtual environment under scratch and installs the full GPU inference stack. This is a one-time setup; subsequent SLURM jobs simply activate the same environment. `vllm==0.11.2` handles batched Llama inference, `transformers==4.57.6` is pinned because vLLM 0.11.2 breaks with newer releases, and `torch` is compiled for CUDA 12.1 to match Midway3's GPU drivers. The Llama model weights (~16 GB) are downloaded from HuggingFace once and stored in scratch alongside the environment.
 
 ```bash
 SCRATCH="/scratch/midway3/${USER}"
@@ -332,15 +335,17 @@ scp -r <cnetid>@midway3.rcc.uchicago.edu:${SCRATCH}/10k_data/10k-project/llm_out
 
 ### Step 7 — Track 2 & 4: FinBERT + Sentence-BERT (Midway3, SLURM)
 
+Runs two neural NLP models over all 11,269 MD&A texts on Midway3 GPU nodes, producing the Track 2 and Track 4 features used in the regressions.
+
+Track 2 uses FinBERT (`ProsusAI/finbert`), a BERT model fine-tuned on financial news and SEC filings. It scores each sentence as positive, negative, or neutral, and these are aggregated to the filing level as `fb_net = P(positive) − P(negative)`. Unlike the LM Dictionary, FinBERT understands context and negation — the phrase "not a liability" scores as positive rather than negative.
+
+Track 4 uses Sentence-BERT (`all-mpnet-base-v2`) to encode each MD&A as a single 768-dimensional semantic vector. Comparing a firm's vector in year *t* to year *t−1* via cosine similarity yields a novelty measure: `embed_novelty = 1 − cosine_similarity`. This captures whether management is saying something substantively new relative to the prior year, independent of whether the tone is optimistic or pessimistic.
+
 ```bash
 # On Midway3
 sbatch scripts/submit_finbert.sh
 squeue -u $USER
 ```
-
-This runs `scripts/midway3_finbert_embed.py`, which computes:
-- **Track 2:** FinBERT sentence-level sentiment → `fb_net` = P(positive) − P(negative)
-- **Track 4:** Sentence-BERT year-over-year cosine similarity → `embed_novelty` = 1 − cosine similarity
 
 Download results to local:
 ```bash
@@ -353,31 +358,31 @@ scp <cnetid>@midway3.rcc.uchicago.edu:${SCRATCH}/10k_data/10k-project/processed/
 
 ### Step 8 — CAR Computation (Local Mac)
 
-Compute cumulative abnormal returns (market-adjusted) around **both** event dates:
+Computes cumulative abnormal return (CAR) around two event dates. The primary event is `date_filed` — the date the 10-K is formally submitted to the SEC and first available to the public. For each firm-year, the script sums market-adjusted daily returns (firm return minus the CRSP value-weighted market return) over the [−1, +1] trading-day window around `date_filed`, producing `car_filed_1_1`. A [−3, +3] window is also computed for robustness.
+
+The earnings announcement date (`rdq`) CAR is computed separately and used only as a robustness check. Because the 10-K text is not yet public at the time of the earnings announcement — the filing typically comes several weeks later — any NLP predictability in the `rdq` window reflects text being correlated with earnings news quality, not a causal effect of the text itself on market prices.
 
 ```bash
-# CAR around rdq (earnings announcement date) — computed inside analysis_track124.ipynb
-
-# CAR around date_filed (10-K filing date) — robustness check
+# CAR around date_filed (primary outcome)
 python scripts/compute_car_filing.py
 # Output: data/car_filing_date.parquet
-```
 
-Uses `data/crsp_daily.parquet` and `data/crsp_market.parquet` already downloaded locally.
+# CAR around rdq (robustness check) is computed inside analysis_track124.ipynb
+```
 
 ---
 
 ### Step 9 — Analysis Notebooks (Local Mac)
 
-Run in order:
+`analysis_track124.ipynb` builds the analysis panel: it computes LM Dictionary scores (Track 1) by counting words against the Loughran-McDonald lexicon, merges in the FinBERT and Sentence-BERT scores from Midway3, and outputs `data/analysis_panel.parquet` — one row per firm-year with all NLP features and CAR outcomes ready for regression.
+
+`analysis_track1234.ipynb` runs the full econometric analysis. It merges in Llama scores (Track 3), z-score standardizes all NLP variables so coefficients are comparable across tracks, and estimates OLS regressions with industry (2-digit SIC) and year fixed effects and firm-clustered standard errors. The primary outcome throughout is CAR[−1,+1] around `date_filed`. Models M1–M4 test each track in isolation to establish standalone predictive power; Model MC (horse-race) enters all eight NLP variables simultaneously to test which signals survive head-to-head. For causal identification, a first-difference estimator regresses year-over-year changes in CAR on year-over-year changes in NLP scores, removing all time-invariant firm heterogeneity. An exploratory IV/2SLS using leave-one-out industry-year peer means as an instrument is also reported, with an explicit caveat that the exclusion restriction may not hold due to industry-wide shock transmission.
 
 ```bash
-# Step 9a: Track 1 (LM Dictionary) + Track 2 (FinBERT) + Track 4 (SBERT)
-# Computes CAR[−1,+1] and CAR[−3,+3] around rdq
-# Output: data/analysis_panel.parquet
+# Step 9a: build analysis panel (Track 1/2/4 + CAR computation)
 jupyter notebook analysis_track124.ipynb
 
-# Step 9b: Add Track 3 (Llama), horse-race, causal identification, robustness
+# Step 9b: full regression analysis (all tracks + causal ID + robustness)
 jupyter notebook analysis_track1234.ipynb
 ```
 
@@ -404,7 +409,7 @@ Slurm job IDs for all runs (pilot test + production), as required for course ver
 
 | Job ID | Description | Script | Array | Outcome |
 |--------|-------------|--------|-------|---------|
-| `49440971` | **Pilot test** — small-sample end-to-end run to verify pipeline before full production | `week2_llama_inference.py` | Single job | COMPLETED (exit 0:0) — confirmed vLLM + V100 + float16 config works |
+| `49440971` | **Pilot test** — small-sample to verify pipeline before full production | `week2_llama_inference.py` | Single job | COMPLETED (exit 0:0) — confirmed vLLM + V100 + float16 config works |
 | `49433115` | **Production** — Track 2+4: FinBERT + Sentence-BERT | `scripts/midway3_finbert_embed.py` via `scripts/submit_finbert.sh` | Single job | COMPLETED (exit 0:0) — produced `finbert_scores.parquet` and `embed_similarity.parquet` |
 | `49442040` | **Production** — Track 3: Llama-3.1-8B full dataset | `week2_llama_inference.py` via `submit_llama.sh` | `--array=0-11%3` (12 tasks, all COMPLETED exit 0:0) | 11,269 / 11,269 filings scored, 0 parse failures |
 
