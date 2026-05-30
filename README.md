@@ -372,19 +372,19 @@ python scripts/compute_car_filing.py
 
 ---
 
-### Step 9 — Analysis Notebooks (Local Mac)
+### Step 9 — Analysis Notebook (Local Mac)
 
-`analysis_track124.ipynb` builds the analysis panel: it computes LM Dictionary scores (Track 1) by counting words against the Loughran-McDonald lexicon, merges in the FinBERT and Sentence-BERT scores from Midway3, and outputs `data/analysis_panel.parquet` — one row per firm-year with all NLP features and CAR outcomes ready for regression.
+`analysis_full.ipynb` is the single end-to-end analysis notebook. It loads all raw inputs directly (master panel, LM scores, FinBERT scores, Sentence-BERT embeddings, CRSP returns, Llama JSONL output), computes CAR around both `date_filed` (primary) and `rdq` (robustness) inline, merges all four NLP tracks into one panel, and runs the complete econometric analysis.
 
-`analysis_track1234.ipynb` runs the full econometric analysis. It merges in Llama scores (Track 3), z-score standardizes all NLP variables so coefficients are comparable across tracks, and estimates OLS regressions with industry (2-digit SIC) and year fixed effects and firm-clustered standard errors. The primary outcome throughout is CAR[−1,+1] around `date_filed`. Models M1–M4 test each track in isolation to establish standalone predictive power; Model MC (horse-race) enters all eight NLP variables simultaneously to test which signals survive head-to-head. For causal identification, a first-difference estimator regresses year-over-year changes in CAR on year-over-year changes in NLP scores, removing all time-invariant firm heterogeneity. An exploratory IV/2SLS using leave-one-out industry-year peer means as an instrument is also reported, with an explicit caveat that the exclusion restriction may not hold due to industry-wide shock transmission.
+The notebook is structured in 15 sections: data loading → CAR computation → track merging → z-score standardization → descriptive statistics → OLS regressions (M1–M4 standalone, MC horse-race, MD wider window) → incremental F-test → coefficient plot → CAR-by-quintile → results export → VIF multicollinearity check → first-difference causal identification → exploratory IV/2SLS → causal summary → robustness check with rdq event window.
+
+The primary outcome throughout is `car_filed_1_1` (CAR[−1,+1] around `date_filed`). Models M1–M4 test each track in isolation; Model MC enters all eight NLP variables simultaneously to test which signals survive head-to-head. The first-difference estimator removes all time-invariant firm heterogeneity by regressing Δ(CAR_filed) on Δ(NLP scores). An exploratory IV/2SLS using leave-one-out industry-year peer means is also reported, with an explicit caveat that the exclusion restriction may not hold.
 
 ```bash
-# Step 9a: build analysis panel (Track 1/2/4 + CAR computation)
-jupyter notebook analysis_track124.ipynb
-
-# Step 9b: full regression analysis (all tracks + causal ID + robustness)
-jupyter notebook analysis_track1234.ipynb
+jupyter notebook analysis_full.ipynb
 ```
+
+**Rendered notebook (no setup required):** [View on nbviewer](https://nbviewer.org/github/yulinwang123/10k-llm-event-study/blob/main/analysis_full.ipynb)
 
 ---
 
@@ -520,8 +520,7 @@ OLS with FE does not rule out time-varying firm-level confounders (e.g., persist
 ├── submit_llama.sh                 # SLURM job array for Llama
 ├── setup_midway3.sh                # One-time Midway3 environment setup
 │
-├── analysis_track124.ipynb         # Step 9a: Track 1/2/4 + CAR computation
-├── analysis_track1234.ipynb        # Step 9b: All tracks + causal ID + robustness
+├── analysis_full.ipynb             # Step 9: All tracks + causal ID + robustness (single notebook)
 │
 ├── data/                           # Local data (gitignored)
 │   ├── master_panel.parquet
