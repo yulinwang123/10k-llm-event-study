@@ -10,7 +10,7 @@
 
 10-K filings contain a Management Discussion & Analysis (MD&A) section where executives describe the company's performance, outlook, and risks in plain language. Loughran & McDonald (2011) showed that bag-of-words dictionary methods applied to these texts can predict abnormal stock returns around earnings announcements. But dictionaries are blind to context, negation, and nuance.
 
-This project asks: **do more sophisticated NLP methods — neural sentiment (FinBERT), semantic novelty (Sentence-BERT), and large language model scoring (Llama-3.1-8B) — produce text measures that better predict cumulative abnormal returns (CAR) around earnings announcements?** And once we have all four measures in a horse-race regression, which signal survives, and does any of it hold up under causal identification?
+This project asks: **do more sophisticated NLP methods — neural sentiment (FinBERT), semantic novelty (Sentence-BERT), and large language model scoring (Llama-3.1-8B) — produce text measures that better predict cumulative abnormal returns (CAR) around the 10-K filing date, and therefore provide more actionable signals for investors processing annual filings?** Once we have all four measures in a horse-race regression, which signal survives head-to-head competition, and does any of it hold up under causal identification strategies that rule out confounding?
 
 ---
 
@@ -494,13 +494,13 @@ OLS with FE does not rule out time-varying firm-level confounders (e.g., persist
 
 **First Difference (FD):** Regress CAR on year-over-year *changes* in NLP scores. Removes all time-invariant firm heterogeneity.
 
-**IV / 2SLS:** Instrument each firm's LLM optimism with the leave-one-out mean of peers in the same 2-digit SIC × year cell. First-stage F = 116 (strong instrument). Tests whether industry-driven variation in optimism causally predicts CAR.
+**IV / 2SLS (exploratory):** Instrument each firm's LLM optimism with the leave-one-out mean of peers in the same 2-digit SIC × year cell. First-stage F = 116 (strong instrument on relevance). Reported as an exploratory exercise; the exclusion restriction is not cleanly satisfied because industry-wide shocks that drive peer optimism can also directly affect individual firm CAR through real economic channels, not only through the text channel. Results should be interpreted with this caveat in mind.
 
 ### Robustness Checks
 
-**CAR[−3,+3]:** Wider event window (Model MD)
+**CAR[−3,+3]:** Wider event window (Model MD) — confirms results are not sensitive to window width.
 
-**date_filed event window:** Recompute CAR around the 10-K filing date instead of the earnings announcement date. Tests whether text carries *incremental* information beyond what markets price on announcement day.
+**rdq event window:** Recompute CAR around the earnings announcement date (`rdq`) instead of the 10-K filing date. Because the 10-K text is not yet publicly available at earnings announcement time, any NLP predictability in this window reflects correlation with underlying earnings quality rather than a market reaction to the text itself. Including it as a robustness check tests whether the filing-date results are contaminated by that reverse-causality channel.
 
 ---
 
