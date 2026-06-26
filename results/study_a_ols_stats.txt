@@ -1,0 +1,14 @@
+
+Project A OLS Results
+=====================
+Sample: 65,961 firm-quarter observations
+
+Key finding (SUE coefficient = ERC):
+  Spec 1 (raw):         0.0054  (t=42.91)
+  Spec 2 (+controls):   0.0053  (t=39.70)
+  Spec 3 (+text):       0.0050  (t=38.06)
+  Spec 4 (+FE):         0.0053  (t=36.94)
+
+Text channel (prepared remarks tone in Spec 3):
+  prep_lm_tone coef:    0.2232
+  (t=3.73)

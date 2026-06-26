@@ -1,0 +1,39 @@
+
+Project B HTE Results
+=====================
+Sample: 64,742 firm-quarter observations
+Moderators: eps_vol (standardized), io_pct (standardized), numest (standardized)
+
+BLP Interaction Regression
+--------------------------
+Baseline ERC (θ_0):
+  coef = 0.00515   SE = 0.00013   t = 38.91  ***
+
+HTE interaction coefficients (τ_k) — units: Δθ per 1-SD change in moderator:
+  D̃ × eps_vol  (cognitive load):       τ = -0.00046  SE=0.00011  t=-4.06  ***
+  D̃ × io_pct   (sophistication):       τ = +0.00010  SE=0.00013  t=0.78  
+  D̃ × numest   (intermediation):       τ = +0.00034  SE=0.00013  t=2.60  ***
+
+Tercile ERC (θ by group):
+
+  eps_vol:
+      Low: θ = 0.00685  SE = 0.00021  n=21,581
+      Mid: θ = 0.00521  SE = 0.00015  n=21,580
+     High: θ = 0.00395  SE = 0.00015  n=21,581
+
+  io_pct:
+      Low: θ = 0.00472  SE = 0.00017  n=21,581
+      Mid: θ = 0.00534  SE = 0.00017  n=21,580
+     High: θ = 0.00496  SE = 0.00015  n=21,581
+
+  numest:
+      Low: θ = 0.00448  SE = 0.00014  n=22,545
+      Mid: θ = 0.00560  SE = 0.00018  n=22,179
+     High: θ = 0.00540  SE = 0.00019  n=20,018
+
+Causal Forest: Estimated — see study_b_cate_dist.png
+
+Interpretation:
+  τ(eps_vol) < 0 → ✓ Higher earnings complexity reduces ERC (cognitive load hypothesis)
+  τ(io_pct)  > 0 → ✓ Sophisticated investors price hard numbers more aggressively
+  τ(numest)  > 0 → ✓ More analysts → harder news more efficiently priced

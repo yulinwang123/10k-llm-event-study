@@ -49,3 +49,6 @@ macs_final
 ec2-key.pem
 lm_scores.parquet
 *.parquet
+archive/docs/*.pdf
+archive/docs/**/*.zip
+*.pdf

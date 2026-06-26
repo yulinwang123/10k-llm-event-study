@@ -1,0 +1,20 @@
+
+Project A DML Results
+=====================
+Sample: 65,961 firm-quarter observations
+Z dimension: 70 (controls + text + time FE)
+
+                     θ (ERC)    SE       t       p
+OLS (no partial):   0.0050    0.0001   38.05   0.0000
+DML Lasso:          0.0050    0.0001   53.21   0.0000
+DML Ridge:          0.0050    0.0001   53.29   0.0000
+DML RF:             0.0050    0.0001   52.30   0.0000
+
+Narrative bias in OLS: -0.0000
+  (OLS overstates/understates ERC by this amount due to text confounding)
+
+Interpretation:
+  θ_DML is the marginal effect of hard earnings news (SUE) on CAR
+  after fully partialling out managerial narrative (text features Z).
+  Significance of θ_DML confirms the hard news channel is independent
+  of narrative framing — the basis for Project B.
