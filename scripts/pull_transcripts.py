@@ -25,7 +25,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BASE      = Path(__file__).parent.parent / "data"
-WRDS_USER = "yulinwang"
+WRDS_USER = os.getenv("WRDS_USER", "your_wrds_username")
 START     = "2010-01-01"   # CIQ coverage sparse before 2010
 END       = "2023-12-31"   # full fiscal year coverage
 

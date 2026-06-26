@@ -22,7 +22,7 @@ import pandas as pd
 from pathlib import Path
 
 BASE      = Path(__file__).parent.parent / "data"
-WRDS_USER = "yulinwang"
+WRDS_USER = os.getenv("WRDS_USER", "your_wrds_username")
 START     = "2004-01-01"
 END       = "2024-12-31"
 
