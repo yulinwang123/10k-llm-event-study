@@ -12,6 +12,8 @@ data_pilot/llm_batches/
 # ── macOS ─────────────────────────────────────────────────────────────────
 .DS_Store
 **/.DS_Store
+.Rhistory
+faculty_outreach_memo*.md
 
 # ── LaTeX build artifacts ─────────────────────────────────────────────────
 out/

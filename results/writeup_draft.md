@@ -1,153 +1,175 @@
-# Hard News vs. Narrative Framing in Earnings Announcements
-## A Double Machine Learning Approach to Attention Allocation
+# Hard Earnings News and Managerial Narrative in Earnings Announcements
+## Current Baseline Results and Planned LLM Extension
 
-**Yulin Wang — University of Chicago**
-**Data: WRDS (CIQ + IBES + CRSP + Compustat), 2010–2023**
+**Yulin Wang — University of Chicago**  
+**Data: WRDS (CIQ + IBES + CRSP + Compustat + 13F), 2010-2023**
 
 ---
 
-## 1. Research Questions
+## 1. Research Question
 
-When a firm reports earnings, two signals arrive simultaneously: a hard number (the earnings surprise) and a managerial narrative (the earnings call). This paper asks two questions.
+This project studies how investors price hard earnings numbers and managerial narratives when both arrive during earnings announcements.
 
-**Project A:** After controlling for managerial narrative framing, does earnings surprise still have an independent causal effect on stock returns?
+The main research question is:
 
-**Project B:** When do investors rely more on hard numbers versus narrative? Specifically, does the earnings response coefficient (ERC) vary systematically with earnings complexity, investor sophistication, and analyst coverage?
+> Once narrative is measured more semantically, how much independent weight does the market place on hard earnings surprise versus managerial narrative, and does this weighting vary with the information environment?
+
+The current repository implements the data pipeline and a baseline analysis using Loughran-McDonald dictionary features and readability measures as word-bag proxies for the narrative channel. These measures are useful as a benchmark, but they are not the intended final narrative measurement strategy. The planned next step is to replace them with LLM-extracted semantic measures from earnings call transcripts and re-estimate the relative pricing weights on hard earnings surprise and managerial narrative.
 
 ---
 
 ## 2. Data and Sample
 
-The sample covers quarterly earnings calls from 2010 to 2023, matched across four data sources. Earnings call transcripts (prepared remarks and Q&A sections) are drawn from Capital IQ via WRDS. Earnings surprise (SUE) is constructed from IBES quarterly consensus forecasts: SUE = (actual EPS − median analyst forecast) / forecast standard deviation, measured using the most recent pre-announcement consensus. Cumulative abnormal returns (CAR) are computed from CRSP daily returns using a market-adjusted compounding method over the window [−1, +1] trading days around the announcement date. Firm controls (size, book-to-market, leverage, ROA, earnings volatility) come from Compustat. Institutional ownership is from Thomson Reuters 13F filings linked to CRSP via CUSIP.
+The sample covers quarterly earnings calls from 2010 to 2023, matched across five data sources:
 
-The final estimation sample contains **65,961 firm-quarter observations** across **2,734 unique firms**. SUE is winsorized at the 1st and 99th percentiles. CAR[−1,+1] has a mean of 0.06% and standard deviation of 9.45%, consistent with prior literature.
+- **CIQ earnings call transcripts:** prepared remarks and Q&A text.
+- **IBES:** quarterly analyst consensus forecasts and actual EPS.
+- **CRSP:** daily stock returns and market returns.
+- **Compustat:** firm controls such as size, book-to-market, leverage, ROA, loss indicator, and earnings volatility.
+- **13F institutional holdings:** institutional ownership percentage.
 
-Text features are computed from transcript text using the Loughran-McDonald (2011) Master Dictionary. Separate features are constructed for prepared remarks and Q&A sections: LM tone ((positive − negative) / total words), uncertainty word ratio, litigious word ratio, and Gunning Fog Index. The average prepared-remarks section is 2,865 words; Q&A sections average 4,001 words. Prepared-remarks tone averages +1.1%, confirming the well-known optimism bias in managerial communication.
+The hard-news variable is standardized unexpected earnings:
+
+```text
+SUE = (actual EPS - median analyst forecast) / forecast standard deviation
+```
+
+The outcome is announcement-window CAR over [-1, +1] around the earnings announcement / call date.
+
+The current estimation sample contains approximately **65,000 firm-quarter observations** across more than **2,700 firms**.
 
 ---
 
-## 3. Project A: Does Hard News Matter After Partialling Out Narrative?
+## 3. Baseline: Hard-News ERC and Word-Bag Narrative
+
+The first step estimates the standard ERC relationship between earnings surprise and announcement returns, then adds word-bag narrative measures from the earnings call.
+
+Current text features are computed separately for prepared remarks and Q&A:
+
+- LM tone
+- negative word ratio
+- uncertainty word ratio
+- litigious word ratio
+- Gunning Fog index
+- word counts
 
 ### 3.1 OLS Baseline
 
-Table 1 presents four OLS specifications with clustered standard errors by firm. The dependent variable is CAR[−1,+1] (winsorized). The treatment variable is winsorized SUE.
+The OLS specifications use CAR[-1,+1] as the dependent variable and winsorized SUE as the hard-news variable.
 
-**Table 1: OLS Earnings Response Coefficients**
+| Specification | SUE coef | t-stat | R2 | N |
+|---|---:|---:|---:|---:|
+| Raw ERC | 0.0054 | 42.91 | 6.6% | 70,033 |
+| + Firm controls | 0.0053 | 39.70 | 7.1% | 66,683 |
+| + Text features | 0.0050 | 38.06 | 8.2% | 65,961 |
+| + Firm FE + Time FE | 0.0053 | 36.94 | 15.3% | 65,961 |
 
-| Specification | SUE coef (θ) | t-stat | R² | N |
-|---|---|---|---|---|
-| (1) Raw ERC | 0.0054 | 42.91 | 6.6% | 70,033 |
-| (2) + Firm controls | 0.0053 | 39.70 | 7.1% | 66,683 |
-| (3) + Text features | 0.0050 | 38.06 | 8.2% | 65,961 |
-| (4) + Firm FE + Time FE | 0.0053 | 36.94 | 15.3% | 65,961 |
+A one-standard-deviation increase in SUE is associated with roughly a 0.50-0.54 percentage point increase in announcement-window CAR. Adding dictionary-based text features reduces the hard-news coefficient only slightly.
 
-A one-standard-deviation increase in SUE is associated with a 0.50–0.54% higher announcement-window CAR. Adding text controls in Specification (3) reduces θ slightly from 0.0054 to 0.0050, suggesting that narrative framing is correlated with earnings surprise but does not fully account for the price reaction. Notably, prepared-remarks LM tone enters significantly in Specification (3) with a coefficient of 0.223 (t = 3.73), confirming that positive language in management's prepared remarks is independently associated with higher returns, above and beyond the earnings number itself.
+Prepared-remarks LM tone is also positively associated with announcement returns in the specification with text controls. This suggests that the current word-bag narrative proxy contains independent return-relevant information, although it may be too coarse to capture the full narrative channel.
 
-### 3.2 Double Machine Learning Estimation
+---
 
-The OLS estimates in Table 1 restrict the confounding function to be linear. To allow for nonlinear interactions between text features, firm characteristics, and time effects, we apply Double Machine Learning (DML) partialling-out (Chernozhukov et al., 2018). The model is:
+## 4. DML / Cross-Fitting Robustness
 
-> CAR_i = θ · SUE_i + g(Z_i) + ε_i
-> SUE_i = m(Z_i) + v_i
+Double Machine Learning is used as a robustness and adjustment tool, not as the main contribution. The current DML specification estimates:
 
-where Z includes all LM text features (prepared remarks and Q&A), firm controls, and quarter fixed effects. The nuisance functions g(·) and m(·) are estimated via cross-fitted Lasso, Ridge, and Random Forest regressions (K = 5 folds). The treatment effect θ is recovered from the residual regression Ỹ ~ D̃, where Ỹ = CAR − ĝ(Z) and D̃ = SUE − m̂(Z).
+```text
+CAR_i = theta * SUE_i + g(Z_i) + error_i
+SUE_i = m(Z_i) + residual_i
+```
 
-**Table 2: DML Estimates of ERC**
+where Z includes word-bag narrative measures, firm controls, and time effects. The nuisance functions are estimated using cross-fitted Lasso, Ridge, and Random Forest models.
 
-| Method | Nuisance | θ | SE | t-stat |
-|---|---|---|---|---|
-| OLS (benchmark) | Linear | 0.0050 | 0.000131 | 38.05 |
+| Method | Nuisance | theta | SE | t-stat |
+|---|---|---:|---:|---:|
+| OLS benchmark | Linear | 0.0050 | 0.000131 | 38.05 |
 | DML | Lasso | 0.0050 | 0.000094 | 53.21 |
 | DML | Ridge | 0.0050 | 0.000094 | 53.29 |
 | DML | Random Forest | 0.0050 | 0.000095 | 52.30 |
 
-Three findings stand out. First, θ is identical across all four methods at 0.0050. The nonlinear partialling-out does not change the point estimate, indicating that OLS's linear text controls were not materially biased: the hard news channel is not confounded by narrative framing, whether that confounding is linear or nonlinear. Second, the DML standard errors are 28% smaller than OLS (0.000094 vs. 0.000131), raising the t-statistic from 38 to 53. This efficiency gain arises because DML removes text-driven variance from both the outcome and treatment equations before the final regression, reducing residual noise. Third, the narrative bias — defined as the difference between the OLS and DML point estimates — is essentially zero (< 0.0001). This confirms that the market correctly prices the hard number independently of how management frames it.
+The word-bag-adjusted ERC remains close to 0.005 across these specifications. I interpret this conservatively: with the current word-bag proxy, hard earnings news remains strongly priced after adjusting for observed narrative, firm characteristics, and time effects. This should not be read as a fully causal estimate, because SUE is not randomly assigned and the current text measures are only proxies for narrative.
 
-**Interpretation.** A one-standard-deviation upward earnings surprise generates a 0.50% announcement-window abnormal return, net of all narrative framing effects. This estimate is highly robust across nuisance models and represents the cleanest available estimate of the average ERC in the 2010–2023 period.
-
----
-
-## 4. Project B: Who Relies More on Hard Numbers?
-
-The DML residuals (Ỹ, D̃) from Project A serve as the input for Project B. These residuals have text, controls, and time effects partialled out, so any remaining heterogeneity in the Ỹ ~ D̃ relationship reflects genuine variation in how the market prices hard earnings news across firms and contexts.
-
-We test three moderating hypotheses:
-
-- **Cognitive load (eps_vol):** When EPS is highly volatile across quarters, the current period's earnings number is harder to interpret as a signal of future cash flows. We predict ERC decreases with eps_vol (τ₁ < 0).
-- **Investor sophistication (io_pct):** Higher institutional ownership implies more sophisticated investors who can more accurately process hard numerical information. We predict ERC increases with io_pct (τ₂ > 0).
-- **Information intermediation (numest):** More analyst coverage means earnings news is more thoroughly researched and disseminated. We predict ERC increases with numest (τ₃ > 0).
-
-### 4.1 Best Linear Predictor (BLP)
-
-The BLP regression is:
-
-> Ỹ_i = θ₀·D̃_i + τ₁·(D̃_i × eps_vol_s) + τ₂·(D̃_i × io_pct_s) + τ₃·(D̃_i × numest_s) + γ·X_s + ε_i
-
-where all moderators are standardized (zero mean, unit variance). Standard errors are clustered by firm.
-
-**Table 3: BLP Heterogeneous Treatment Effects**
-
-| Term | Coefficient | SE | t-stat | Hypothesis |
-|---|---|---|---|---|
-| D̃ (baseline ERC, θ₀) | +0.00515 | 0.00013 | 38.91*** | — |
-| D̃ × eps_vol (cognitive load) | −0.00046 | 0.00011 | −4.06*** | τ₁ < 0 ✓ |
-| D̃ × io_pct (sophistication) | +0.00010 | 0.00013 | +0.78 | τ₂ > 0 ✗ |
-| D̃ × numest (intermediation) | +0.00034 | 0.00013 | +2.60*** | τ₃ > 0 ✓ |
-
-*Note: All moderators standardized. Firm-clustered SE. *** p<0.01.*
-
-**Earnings complexity strongly reduces ERC.** A one-standard-deviation increase in EPS volatility reduces the ERC by 0.00046, roughly 9% of the baseline θ₀ = 0.00515. This is the most economically and statistically significant result in Table 3. Importantly, this effect is estimated on DML residuals — it is not contaminated by the text channel, firm size, leverage, or time trends.
-
-**Analyst coverage moderately increases ERC.** A one-standard-deviation increase in analyst count raises ERC by 0.00034 (t = 2.60). More pre-processed information appears to sharpen the market's response to the hard number.
-
-**Institutional ownership is a null result.** τ₂ = +0.00010 with t = 0.78, insignificant. Sophisticated investors do not respond more aggressively to earnings surprises in the announcement window. One interpretation: institutional investors may incorporate earnings information more gradually via channels other than the announcement window (e.g., pre-call information flow, analyst pre-announcements).
-
-### 4.2 Tercile Analysis
-
-**Table 4: ERC by Moderator Tercile**
-
-| Moderator | Low Tercile | Mid Tercile | High Tercile | High / Low |
-|---|---|---|---|---|
-| eps_vol | 0.00685 | 0.00521 | 0.00395 | 0.58× |
-| io_pct | 0.00472 | 0.00534 | 0.00496 | 1.05× |
-| numest | 0.00448 | 0.00560 | 0.00540 | 1.21× |
-
-*All tercile θ estimates significant at p < 0.001.*
-
-The eps_vol gradient is striking. Firms in the lowest eps_vol tercile have an ERC of 0.685% — 73% higher than the 0.395% ERC for firms in the highest tercile. The confidence intervals across terciles are non-overlapping, confirming that this gradient is not sampling noise. For io_pct, the pattern is non-monotonic (Low < High < Mid), consistent with the null result in the BLP. For numest, the ERC rises from low to mid tercile but then stabilizes, suggesting diminishing returns to analyst coverage.
-
-### 4.3 R-Learner Robustness
-
-As a nonparametric robustness check, we implement the R-Learner (Nie and Wager, 2021) using Random Forest as the CATE learner, weighted by D̃² to account for variation in treatment strength. The estimated CATE distribution has mean 0.00564 and standard deviation 0.00161, with a range of [0.00068, 0.01166]. The most treated firms have an ERC nearly 17 times larger than the least treated.
-
-Random Forest feature importance confirms the BLP ordering:
-
-| Moderator | RF Feature Importance | Corr(CATE, X) |
-|---|---|---|
-| eps_vol | 61.3% | −0.353 |
-| io_pct | 24.2% | +0.123 |
-| numest | 14.5% | +0.126 |
-
-Earnings complexity alone explains 61% of the estimated CATE variation. The R-Learner also detects a nonlinear io_pct effect (24% importance, +0.12 correlation with CATE) that the BLP's linear interaction misses, suggesting that the sophistication channel operates nonlinearly — it matters most at very high institutional ownership levels.
+The key next question is whether this conclusion survives when narrative is measured with richer semantic signals from an LLM.
 
 ---
 
-## 5. Discussion
+## 5. Current Heterogeneity Results
 
-Three takeaways emerge from the combined A + B results.
+The current heterogeneity analysis uses DML residuals from the baseline word-bag specification and studies whether hard-news ERC varies with the information environment.
 
-**1. Hard numbers are priced independently of narrative.** The DML estimate confirms that earnings surprise has a stable, significant effect on announcement returns regardless of how management frames the news. The narrative channel (tone, uncertainty, fog index) is a parallel signal, not a substitute for the hard number.
+The moderators are:
 
-**2. Cognitive load is the primary source of ERC heterogeneity.** Earnings complexity — measured by the historical volatility of EPS — explains 61% of cross-sectional ERC variation. When earnings are hard to interpret as a signal of future value, the market under-reacts to the announced number. This is consistent with the bounded rationality literature: limited attention and processing capacity reduce the informativeness of hard data.
+- **Earnings volatility (`eps_vol`):** cognitive load / earnings complexity.
+- **Institutional ownership (`io_pct`):** investor sophistication.
+- **Analyst coverage (`numest`):** information intermediation.
 
-**3. Analyst coverage amplifies hard news; institutional ownership does not.** Analysts act as information intermediaries who sharpen the market's reaction to earnings surprises (τ₃ > 0, t = 2.60). By contrast, institutional ownership has no significant linear effect on ERC in the announcement window. Institutions may process earnings information pre-announcement or react more gradually across the post-announcement drift window.
+### 5.1 Best Linear Predictor
+
+| Term | Coefficient | SE | t-stat | Interpretation |
+|---|---:|---:|---:|---|
+| Baseline ERC | +0.00515 | 0.00013 | 38.91 | hard-news benchmark |
+| SUE residual x earnings volatility | -0.00046 | 0.00011 | -4.06 | higher complexity, lower ERC |
+| SUE residual x institutional ownership | +0.00010 | 0.00013 | +0.78 | not significant |
+| SUE residual x analyst coverage | +0.00034 | 0.00013 | +2.60 | more intermediation, higher ERC |
+
+### 5.2 Tercile Patterns
+
+| Moderator | Low Tercile | Mid Tercile | High Tercile |
+|---|---:|---:|---:|
+| earnings volatility | 0.00685 | 0.00521 | 0.00395 |
+| institutional ownership | 0.00472 | 0.00534 | 0.00496 |
+| analyst coverage | 0.00448 | 0.00560 | 0.00540 |
+
+The clearest pattern is that ERC is lower for firms with high earnings volatility. Analyst coverage is associated with a higher ERC, while institutional ownership is not monotonic and not significant in the linear interaction specification.
+
+These findings motivate a richer relative-weighting analysis. If LLM semantic narrative measures are available, the next version can ask whether high-volatility or low-analyst-coverage firms place relatively more weight on narrative and less weight on hard earnings surprise.
+
+---
+
+## 6. Planned LLM Relative-Weighting Design
+
+The planned LLM step will extract structured semantic narrative variables from earnings call transcripts, such as:
+
+- contextual sentiment
+- uncertainty / hedging
+- forward-looking tone
+- defensiveness
+- Q&A informativeness or evasiveness
+- management optimism conditional on reported earnings
+
+The key comparison is:
+
+```text
+CAR_i = theta * SUE_i + controls + FE + error_i
+CAR_i = theta_LM * SUE_i + beta_LM * Narrative_LM_i + controls + FE + error_i
+CAR_i = theta_LLM * SUE_i + beta_LLM * Narrative_LLM_i + controls + FE + error_i
+```
+
+This design asks:
+
+- Does LLM narrative explain announcement-window returns beyond SUE and word-bag text measures?
+- Does including LLM narrative reduce the estimated hard-news ERC more than including dictionary measures?
+- Do the relative weights on SUE and narrative vary with earnings volatility, analyst coverage, or institutional ownership?
+
+If LLM-based narrative measures explain more return variation or materially change the hard-news coefficient, that would suggest traditional dictionary measures understate the role of managerial narrative. If the hard-news coefficient remains stable even with LLM semantic narrative controls, that would suggest hard earnings news has an independent pricing role beyond managerial narrative.
+
+---
+
+## 7. Limitations
+
+The current analysis has several limitations:
+
+- The current text measures are dictionary-based proxies and may miss context, hedging, defensiveness, and semantic nuance.
+- Daily returns identify the pricing of the earnings announcement package, not the isolated causal effect of the earnings call itself.
+- Intraday returns would allow a stronger design separating the press-release-to-call window from the call-window reaction.
+- DML helps adjust for high-dimensional observed controls, but it does not make SUE randomly assigned.
 
 ---
 
 ## References
 
-- Chernozhukov, V., Chetverikov, D., Demirer, M., Duflo, E., Hansen, C., Newey, W., & Robins, J. (2018). Double/debiased machine learning for treatment and structural parameters. *Econometrics Journal*, 21(1), C1–C68.
-- Loughran, T. & McDonald, B. (2011). When is a liability not a liability? Textual analysis, dictionaries, and 10-Ks. *Journal of Finance*, 66(1), 35–65.
-- Nie, X. & Wager, S. (2021). Quasi-oracle estimation of heterogeneous treatment effects. *Biometrika*, 108(2), 299–319.
-- Collins, D.W. & Kothari, S.P. (1989). An analysis of intertemporal and cross-sectional determinants of earnings response coefficients. *Journal of Accounting and Economics*, 11(2–3), 143–181.
-- Ball, R. & Brown, P. (1968). An empirical evaluation of accounting income numbers. *Journal of Accounting Research*, 6(2), 159–178.
+- Ball, R. & Brown, P. (1968). An empirical evaluation of accounting income numbers. *Journal of Accounting Research*, 6(2), 159-178.
+- Chernozhukov, V., Chetverikov, D., Demirer, M., Duflo, E., Hansen, C., Newey, W., & Robins, J. (2018). Double/debiased machine learning for treatment and structural parameters. *Econometrics Journal*, 21(1), C1-C68.
+- Loughran, T. & McDonald, B. (2011). When is a liability not a liability? Textual analysis, dictionaries, and 10-Ks. *Journal of Finance*, 66(1), 35-65.
+- Nie, X. & Wager, S. (2021). Quasi-oracle estimation of heterogeneous treatment effects. *Biometrika*, 108(2), 299-319.

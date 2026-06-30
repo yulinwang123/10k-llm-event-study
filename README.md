@@ -1,222 +1,256 @@
-# Attention Allocation in Earnings Announcements
-### Hard News vs. Managerial Narrative: A Double Machine Learning Approach
+# Earnings Announcements: Hard Numbers vs. Managerial Narrative
 
 **Author:** Yulin Wang, University of Chicago  
-**Data:** WRDS (CIQ Transcripts + IBES + CRSP + Compustat), 2010–2023
+**Data:** WRDS (CIQ Transcripts + IBES + CRSP + Compustat + 13F), 2010-2023
 
 ---
 
-## Research Questions
+## Research Question
 
-When a firm reports earnings, two signals arrive simultaneously: a hard number (earnings surprise) and a managerial narrative (the earnings call). This project asks:
+Once narrative is measured more semantically, how much independent weight does the market place on hard earnings surprise versus managerial narrative, and does this weighting vary with the information environment?
 
-**Project A (baseline):** After controlling for managerial narrative framing, does earnings surprise (SUE) still have an independent marginal effect on stock returns (CAR)?
+Earnings announcements contain both quantitative information, such as standardized unexpected earnings (SUE), and qualitative interpretation, such as managerial tone, uncertainty, forward-looking language, defensiveness, and Q&A discussion. The current dictionary / word-bag measures are a baseline proxy for the narrative channel. The planned next step is to replace them with LLM-extracted semantic narrative measures and ask whether the estimated relative weight on hard earnings news versus narrative changes.
 
-**Project B (main paper):** When do investors rely more on hard numbers vs. narrative? We test three moderators — cognitive load (earnings complexity), investor sophistication (institutional ownership), and information intermediation (analyst coverage).
-
-The key methodological contribution is using **Double Machine Learning (DML)** to partial out the text channel from both the treatment (SUE) and the outcome (CAR), recovering a clean causal estimate of the hard-news earnings response coefficient (ERC).
+The goal is not to show that LLMs predict returns better for their own sake. The economic question is whether richer narrative measurement changes what we infer about how investors price hard earnings numbers and managerial explanations.
 
 ---
 
-## Conceptual Framework
+## Current Status
 
+This repository currently implements the data pipeline and baseline empirical analysis.
+
+**Implemented:**
+
+- Build a firm-quarter earnings announcement panel from CIQ, IBES, CRSP, Compustat, and 13F.
+- Compute announcement-window CAR around earnings announcement / call dates.
+- Construct SUE from IBES pre-announcement consensus forecasts.
+- Extract word-bag narrative measures from earnings call transcripts using Loughran-McDonald dictionary features and readability measures.
+- Estimate baseline ERC regressions with controls, text measures, and fixed effects.
+- Estimate DML / cross-fitting specifications as a robustness and adjustment tool.
+- Estimate heterogeneity in hard-news pricing by earnings volatility, analyst coverage, and institutional ownership.
+
+**Planned next step:**
+
+- Run transcript-level LLM inference to extract structured semantic narrative measures.
+- Re-run the same empirical pipeline by replacing word-bag narrative proxies with LLM semantic measures.
+- Compare the relative pricing weights on hard earnings surprise and managerial narrative.
+
+---
+
+## Empirical Design
+
+### Step 1: Hard-News Benchmark and Word-Bag Narrative Baseline
+
+The first step estimates the standard ERC relationship between SUE and announcement-window CAR:
+
+```text
+CAR_i = theta * SUE_i + controls + FE + error_i
 ```
-Partially Linear Model:
-  CAR = SUE · θ + g(Z) + ε        [outcome equation]
-  SUE = m(Z) + v                   [first stage]
 
-  Y  = CAR[-1,+1]   around earnings call date
-  D  = SUE = (actual EPS − median forecast) / forecast stdev
-  Z  = text features (LM tone, uncertainty, fog index)
-       + firm controls (size, btm, leverage, roa, eps_vol)
-  θ  = marginal ERC after partialling out narrative
+I then add traditional word-bag narrative proxies from the earnings call:
 
-Project B adds HTE:
-  θ(X) = θ_0 + τ · X   where X ∈ {eps_vol, io_pct, numest}
+```text
+CAR_i = theta_LM * SUE_i + beta_LM * Narrative_LM_i + controls + FE + error_i
 ```
 
-**Intuition:** If management frames bad news with optimistic language, OLS conflates the narrative effect with the number effect. DML separates them. The paper's contribution is not re-estimating ERC — it's asking whether the narrative channel is an *independent* confound, and for whom it matters most.
+Current word-bag narrative measures include:
+
+- prepared remarks tone, negative ratio, uncertainty, litigious language, fog index, and word count
+- Q&A tone, uncertainty, fog index, and word count
+
+This establishes how much the hard-news coefficient changes once the baseline narrative proxy is included, and whether the dictionary-based narrative proxy has independent explanatory power.
+
+### Step 2: Planned LLM Semantic Narrative Measures
+
+The planned LLM step replaces `Narrative_LM` with structured semantic measures extracted from earnings call transcripts:
+
+```text
+CAR_i = theta_LLM * SUE_i + beta_LLM * Narrative_LLM_i + controls + FE + error_i
+```
+
+Candidate LLM variables include:
+
+- contextual sentiment
+- uncertainty / hedging
+- forward-looking tone
+- defensiveness
+- Q&A informativeness or evasiveness
+- management optimism conditional on reported earnings
+
+The key comparison is:
+
+```text
+theta:      hard-news ERC with no narrative measure
+theta_LM:   hard-news ERC after controlling for word-bag narrative
+theta_LLM:  hard-news ERC after controlling for LLM semantic narrative
+
+beta_LM:    independent pricing weight on word-bag narrative
+beta_LLM:   independent pricing weight on LLM semantic narrative
+```
+
+If LLM-based narrative measures reduce the hard-news ERC more than word-bag measures, or explain substantially more return variation, that would suggest traditional dictionary measures understate the role of narrative. If the ERC remains stable even after LLM narrative controls, that would suggest hard earnings news has an independent pricing role beyond managerial narrative.
+
+### Step 3: Information-Environment Heterogeneity
+
+The heterogeneity analysis asks whether the market's relative weight on hard news versus narrative changes with:
+
+- **Cognitive load:** earnings volatility (`eps_vol`)
+- **Information intermediation:** analyst coverage (`numest`)
+- **Investor sophistication:** institutional ownership (`io_pct`)
+
+A future LLM-based version can estimate:
+
+```text
+CAR_i = theta * SUE_i
+      + beta * Narrative_i
+      + theta_X * SUE_i * X_i
+      + beta_X * Narrative_i * X_i
+      + controls + FE + error_i
+```
+
+where `X` is an information-environment moderator.
+
+### Step 4: DML / Cross-Fitting Robustness
+
+Double Machine Learning is used as a robustness and adjustment tool, not as the main contribution. The current DML specification partials out observed text features, firm controls, and time effects:
+
+```text
+CAR_i = theta * SUE_i + g(Z_i) + error_i
+SUE_i = m(Z_i) + residual_i
+```
+
+I interpret these estimates conservatively as narrative-adjusted / control-adjusted ERCs, not as fully causal estimates.
 
 ---
 
 ## Data Sources
 
-| Source | Table | Content |
-|--------|-------|---------|
-| **CIQ (via WRDS)** | `wrds_transcript_detail` | Earnings call events (keydeveventtypeid=48), 2010–2023 |
-| **CIQ** | `ciqtranscriptcomponent` | Full transcript text (prepared remarks + Q&A) |
-| **CIQ** | `wrds_gvkey`, `wrds_ticker` | companyid → GVKEY / IBES ticker linkage |
-| **IBES** | `statsum_epsus` | Quarterly consensus forecasts; `anndats_act` = announcement date |
-| **CRSP** | `dsf`, `dsi` | Daily returns; market index for CAR computation |
-| **CRSP** | `ccmxpf_lnkhist`, `iclink` | GVKEY → PERMNO linkage |
-| **Compustat** | `fundq` | Quarterly firm controls (size, leverage, ROA, special items) |
-| **13F** | `tr_13f.s34` | Institutional ownership (HTE moderator) |
+| Source | Content |
+|---|---|
+| CIQ via WRDS | Earnings call events and transcript text |
+| IBES | Quarterly analyst consensus forecasts and actual EPS |
+| CRSP | Daily returns and market returns |
+| Compustat | Firm fundamentals and controls |
+| 13F | Institutional ownership |
 
-**Event definition:** Quarterly earnings call date (`mostimportantdateutc` from CIQ), matched to IBES announcement date (`anndats_act`) within ±7 days.
+**Event definition:** Quarterly earnings call date from CIQ, matched to the IBES announcement date within a +/- 7 day window.
+
+**Outcome:** `car_m1_p1_win`, market-adjusted CAR over [-1, +1] around the announcement / call date.
+
+**Hard-news variable:** `sue_win`, winsorized standardized unexpected earnings:
+
+```text
+SUE = (actual EPS - median analyst forecast) / forecast standard deviation
+```
 
 ---
 
 ## Pipeline
 
-### Data Collection (WRDS — requires UChicago VPN)
+### Data Collection
 
-```
-Step 1: pull_transcripts.py
-  CIQ wrds_transcript_detail (keydeveventtypeid=48)
-  + ciqtranscriptcomponent (full text by transcriptid)
-  + wrds_gvkey + wrds_ticker
-  → data/transcript_events.parquet      [event metadata + word counts]
-  → data/transcripts_tmp/chunk_*.parquet [full text, 16 chunks × ~50K transcripts]
+```text
+scripts/pull_transcripts.py
+  CIQ earnings call events and transcript text
 
-Step 2: pull_ibes_sue.py
-  ibes.statsum_epsus (fpi='6', quarterly)
-  Pre-announcement consensus: statpers < anndats_act, take MAX(statpers)
-  SUE = (actual - medest) / stdev
-  → data/ibes_sue.parquet
+scripts/pull_ibes_sue.py
+  IBES quarterly consensus forecasts and SUE
 
-Step 3: pull_crsp_car.py
-  crsp.iclink: IBES ticker → PERMNO
-  crsp.dsf + crsp.dsi: daily returns + market return
-  CAR[-1,+1] and CAR[+2,+60] (market-adjusted compounded)
-  → data/crsp_car.parquet
+scripts/pull_crsp_car.py
+  CRSP announcement-window and post-announcement CAR
 
-Step 4: pull_controls.py
-  comp.fundq: size, btm, leverage, roa, special_items, eps_vol
-  tr_13f.s34: institutional ownership pct (io_pct)
-  → data/firm_controls.parquet
-  → data/io_pct.parquet
+scripts/pull_controls.py
+  Compustat controls and 13F institutional ownership
 
-Step 5: merge_event_panel.py
-  Join all above on (ticker, fpedats) with ±7-day tolerance
-  → data/event_panel.parquet
+scripts/merge_event_panel.py
+  Merge all sources into data/event_panel.parquet
 ```
 
-### Text Features (local, no WRDS needed)
+### Text Features
 
-```
-Step 6: compute_text_features.py
-  Reads chunk files one at a time (avoids OOM)
-  LM (Loughran-McDonald) dictionary: tone, uncertainty, litigious
-  Gunning Fog Index: readability / complexity
-  Computed separately for prepared_text and qa_text
-  → data/text_features.parquet
+```text
+scripts/compute_text_features.py
+  Current baseline word-bag narrative proxy
+  Loughran-McDonald dictionary + readability features
 ```
 
 ### Estimation
 
-```
-Step 7a: study_a_ols.py
-  4 specifications (raw ERC → +controls → +text → +firm/time FE)
-  Clustered SE by firm
-  → results/study_a_ols_table.csv
+```text
+scripts/study_a_ols.py
+  Baseline ERC and word-bag narrative regressions
 
-Step 7b: study_a_dml.py
-  DML partialling-out, K=5 cross-fitting
-  Nuisance models: Lasso (primary) + Ridge + Random Forest (robustness)
-  Influence-function SE
-  → results/study_a_dml_results.csv
-  → results/study_a_dml_summary.txt
-  → data/study_a_residuals.parquet     [Y_resid, D_resid → input for Project B]
+scripts/study_a_dml.py
+  DML / cross-fitting robustness
+
+scripts/study_b_hte.py
+  Current heterogeneity analysis for hard-news pricing
 ```
 
-### Run Order
+Run order:
 
-```bash
-cd ~/Desktop/10K
-
-# Step 1–5: WRDS data pull (requires VPN, ~2 hours total)
-python -u scripts/pull_transcripts.py
-python -u scripts/pull_ibes_sue.py
-python -u scripts/pull_crsp_car.py
-python -u scripts/pull_controls.py
-python -u scripts/merge_event_panel.py
-
-# Step 6: Text features (local, ~30 min)
-python -u scripts/compute_text_features.py
-
-# Step 7: Estimation
-python -u scripts/study_a_ols.py
-python -u scripts/study_a_dml.py
-```
-
-Or run everything at once:
 ```bash
 bash scripts/run_pipeline.sh
+python -u scripts/study_b_hte.py
+```
+
+WRDS-dependent data collection requires institutional WRDS access / VPN. Raw WRDS data are not included in this public repository.
+
+---
+
+## Current Preliminary Findings
+
+The current pilot sample contains approximately 65,000 firm-quarter observations across more than 2,700 firms.
+
+Using word-bag narrative proxies:
+
+- SUE is strongly associated with announcement-window CAR.
+- A one-standard-deviation increase in SUE is associated with roughly a 0.50-0.54 percentage point increase in CAR[-1,+1].
+- Adding dictionary-based text features reduces the hard-news coefficient only slightly.
+- DML / cross-fitting estimates also leave the word-bag-adjusted ERC near 0.005.
+
+Current heterogeneity results:
+
+- Higher earnings volatility is associated with a lower ERC.
+- Higher analyst coverage is associated with a higher ERC.
+- Institutional ownership has no clear linear effect in the current specification.
+
+These results motivate the LLM step rather than conclude the paper. The current word-bag results suggest that dictionary narrative controls do not materially change the estimated hard-news ERC. The next question is whether that conclusion survives when narrative is measured with richer semantic signals from an LLM.
+
+---
+
+## Repository Map
+
+```text
+scripts/
+  pull_transcripts.py       CIQ earnings call events and transcript text
+  pull_ibes_sue.py          IBES SUE construction
+  pull_crsp_car.py          CRSP CAR construction
+  pull_controls.py          Compustat controls and 13F IO
+  merge_event_panel.py      Main firm-quarter panel merge
+  compute_text_features.py  LM dictionary and readability features
+  study_a_ols.py            Baseline ERC regressions
+  study_a_dml.py            DML / cross-fitting robustness
+  study_b_hte.py            Heterogeneity analysis
+
+results/
+  writeup_draft.md          Current draft write-up
+  study_a_ols_stats.txt     Baseline OLS summary
+  study_a_dml_summary.txt   DML robustness summary
+  study_b_blp_summary.txt   Heterogeneity summary
+
+faculty_outreach_memo_en.md
+  Short research memo aligned with the current framing
 ```
 
 ---
 
-## Variable Definitions
+## Limitations and Next Steps
 
-| Variable | Role | Source | Notes |
-|----------|------|--------|-------|
-| `sue_win` | Treatment D | IBES | (actual − medest) / stdev, winsorized 1/99% |
-| `car_m1_p1_win` | Outcome Y | CRSP | CAR[−1,+1] market-adjusted, winsorized |
-| `car_p2_p60` | Outcome Y2 | CRSP | CAR[+2,+60] post-announcement drift |
-| `prep_lm_tone` | Confounder Z | CIQ + LM | (pos−neg)/total in prepared remarks |
-| `prep_lm_uncertainty` | Confounder Z | CIQ + LM | uncertainty word ratio |
-| `prep_fog_index` | Confounder Z | CIQ | Gunning Fog readability |
-| `qa_lm_tone` | Confounder Z | CIQ + LM | tone in Q&A section |
-| `size` | Control | Compustat | log(total assets) |
-| `btm` | Control | Compustat | book-to-market |
-| `leverage` | Control | Compustat | total debt / assets |
-| `roa` | Control | Compustat | net income / assets |
-| `eps_vol` | HTE moderator (B) | IBES | rolling 8-quarter stdev of actual EPS |
-| `io_pct` | HTE moderator (B) | 13F | % shares held by institutions |
-| `numest` | HTE moderator (B) | IBES | analyst count |
-
----
-
-## Repository Structure
-
-```
-10K/
-├── scripts/
-│   ├── pull_transcripts.py        # Step 1: CIQ earnings call transcripts
-│   ├── pull_ibes_sue.py           # Step 2: IBES quarterly SUE
-│   ├── pull_crsp_car.py           # Step 3: CRSP CAR around call date
-│   ├── pull_controls.py           # Step 4: Compustat controls + 13F IO
-│   ├── merge_event_panel.py       # Step 5: merge into event panel
-│   ├── compute_text_features.py   # Step 6: LM dictionary + Fog Index
-│   ├── study_a_ols.py             # Step 7a: OLS baseline ERC
-│   ├── study_a_dml.py             # Step 7b: DML partialling-out
-│   └── run_pipeline.sh            # Run all steps in order
-│
-├── data/                          # gitignored
-│   ├── transcript_events.parquet  # CIQ event metadata
-│   ├── transcripts_tmp/           # Full text chunks (keep for Project B)
-│   │   └── chunk_0000–0015.parquet
-│   ├── ibes_sue.parquet
-│   ├── crsp_car.parquet
-│   ├── firm_controls.parquet
-│   ├── io_pct.parquet
-│   ├── text_features.parquet
-│   ├── event_panel.parquet        # master panel
-│   └── study_a_residuals.parquet  # DML residuals → Project B input
-│
-├── results/
-│   ├── study_a_ols_table.csv
-│   ├── study_a_dml_results.csv
-│   └── study_a_dml_summary.txt
-│
-└── README.md
-```
-
----
-
-## Key Design Decisions
-
-**Why earnings calls, not 10-Ks?**  
-10-K filings arrive weeks after earnings announcements. The earnings call is the simultaneous release — hard number (EPS) and narrative arrive together, so investor attention allocation is directly testable.
-
-**Why DML, not OLS with text controls?**  
-OLS with text controls only removes the linear projection of text on returns. DML allows the confounding function g(Z) to be arbitrary and estimated via machine learning, removing both linear and nonlinear text confounds before identifying θ.
-
-**Why LM dictionary, not LLM, for text features (in this step)?**  
-LM features are used as *confounders to be partialled out*, not as the object of interest. For this role, coverage and speed matter more than nuance. LLM-based features are planned for Project B where the narrative quality measure is itself the quantity of interest.
-
-**Why save `study_a_residuals.parquet`?**  
-Project B's HTE analysis uses (Ỹ, D̃) — the DML residuals from Project A — as the outcome and treatment in the heterogeneous effects regression. This avoids re-running the expensive nuisance estimation.
+- Current narrative measures are dictionary-based proxies and may miss context, hedging, defensiveness, and semantic nuance.
+- Daily returns identify the pricing of the earnings announcement package, not a clean causal effect of the call itself. Intraday data would allow a stronger design separating the press-release-to-call window from the call-window reaction.
+- The planned LLM step will begin with a small audited pilot before scaling to the full transcript sample.
+- LLM prompts should use only transcript text and must not condition on returns or future outcomes.
 
 ---
 
@@ -230,7 +264,7 @@ pip install wrds pandas numpy scipy statsmodels scikit-learn pyarrow
 
 ## References
 
-- Chernozhukov, V. et al. (2018). Double/debiased machine learning. *Econometrics Journal*, 21(1), C1–C68.
-- Loughran, T. & McDonald, B. (2011). When is a liability not a liability? *Journal of Finance*, 66(1), 35–65.
-- Ball, R. & Brown, P. (1968). An empirical evaluation of accounting income numbers. *Journal of Accounting Research*, 6(2), 159–178.
-- Bushee, B., Gow, I. & Taylor, D. (2018). Linguistic complexity in firm disclosures. *Journal of Accounting Research*, 56(1), 33–82.
+- Ball, R. & Brown, P. (1968). An empirical evaluation of accounting income numbers. *Journal of Accounting Research*, 6(2), 159-178.
+- Chernozhukov, V. et al. (2018). Double/debiased machine learning. *Econometrics Journal*, 21(1), C1-C68.
+- Loughran, T. & McDonald, B. (2011). When is a liability not a liability? *Journal of Finance*, 66(1), 35-65.
+- Nie, X. & Wager, S. (2021). Quasi-oracle estimation of heterogeneous treatment effects. *Biometrika*, 108(2), 299-319.
